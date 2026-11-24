@@ -162,11 +162,26 @@ export interface JobItemRow {
   grossWtKg: number | null;
 }
 
+export type FreightMode = 'air' | 'sea';
+
+export interface ContainerCounts {
+  c20: number;
+  c40: number;
+  c40hc: number;
+}
+
 export interface FreightConfig {
   ratePerCbm: number;
   ratePerKg: number;
   docChargePct: number; // Default 0.10 (10%)
-  selectedMarkupPct: number; // E3 on PRICE CALC: any decimal (e.g., 0.10, 0.125, 0.25)
+  selectedMarkupPct: number; // E3 on PRICE CALC: item markup, any decimal (e.g., 0.10, 0.125, 0.25)
+  // Air (default): CBM / kg rates above. Sea: containers x rate per container.
+  mode?: FreightMode;
+  containers?: ContainerCounts;
+  containerRates?: ContainerCounts;
+  loadingChargePct?: number; // Sea only; percentage of container freight (Default 0.05)
+  // Freight has its own markup. Missing = same as the item markup (existing jobs unchanged).
+  freightMarkupPct?: number;
 }
 
 export interface JobControls {
@@ -356,6 +371,8 @@ export interface ComputedRow {
   boxes: number | null;
   cbm: number | null;
   grossKgCalc: number | null;
+  // Package size for packing list / delivery note, e.g. "30×20×15" (empty when not entered)
+  boxDims: string;
   // PL / DN values
   cartonNo: string;
   netWtKg: number | null;
@@ -373,7 +390,11 @@ export interface JobCalculationSummary {
   // Freight calculation
   freightByCbm: number;
   freightByKg: number;
-  freightBasis: 'CBM' | 'KG' | 'NONE';
+  freightBasis: 'CBM' | 'KG' | 'NONE' | 'SEA';
+  freightMode: FreightMode;
+  seaLines: { key: keyof ContainerCounts; label: string; qty: number; rate: number; amount: number }[];
+  loadingChargeAmount: number;
+  freightMarkupPct: number;
   baseFreight: number;
   docChargeAmount: number;
   freightWithDoc: number;

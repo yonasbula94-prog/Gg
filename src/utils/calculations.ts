@@ -10,6 +10,8 @@ import {
   ValidationIssue,
   WorkflowGateCheck,
   WorkspaceTab,
+  ContainerCounts,
+  FreightMode,
 } from '../types/procurement';
 
 export function round2(val: number): number {
@@ -188,6 +190,7 @@ export function calculateJob(job: ProcurementJob): JobCalculationSummary {
       boxes,
       cbm,
       grossKgCalc,
+      boxDims: l > 0 && w > 0 && h > 0 ? `${l}×${w}×${h}` : '',
       cartonNo: item.cartonNo,
       netWtKg: safeNetWt,
       grossWtKg: safeGrossWt,
@@ -209,13 +212,38 @@ export function calculateJob(job: ProcurementJob): JobCalculationSummary {
 
   const freightByCbm = round2(totalCbm * ratePerCbm);
   const freightByKg = round2(totalGrossKgCalc * ratePerKg);
-  const baseFreight = Math.max(freightByCbm, freightByKg);
-  const freightBasis: 'CBM' | 'KG' | 'NONE' =
-    baseFreight === 0 ? 'NONE' : freightByCbm >= freightByKg ? 'CBM' : 'KG';
+  const freightMode: FreightMode = job.freight.mode === 'sea' ? 'sea' : 'air';
+  const loadingPct = clampRate(job.freight.loadingChargePct, 0.05, 1);
+  const freightMarkupPct = clampRate(job.freight.freightMarkupPct, activeMarkup, 5);
+  const containerCounts: ContainerCounts = job.freight.containers ?? { c20: 0, c40: 0, c40hc: 0 };
+  const containerRates: ContainerCounts = job.freight.containerRates ?? { c20: 0, c40: 0, c40hc: 0 };
+  const seaLines = (
+    [
+      { key: 'c20', label: "20' container" },
+      { key: 'c40', label: "40' container" },
+      { key: 'c40hc', label: "40' HC container" },
+    ] as { key: keyof ContainerCounts; label: string }[]
+  ).map((l) => {
+    const qty = Math.max(0, Math.floor(safeNonNeg(containerCounts[l.key]) ?? 0));
+    const rate = safeNonNeg(containerRates[l.key]) ?? 0;
+    return { ...l, qty, rate, amount: round2(qty * rate) };
+  });
+  const seaBase = round2(seaLines.reduce((s, l) => s + l.amount, 0));
+  const airBase = Math.max(freightByCbm, freightByKg);
+  const baseFreight = freightMode === 'sea' ? seaBase : airBase;
+  const freightBasis: 'CBM' | 'KG' | 'NONE' | 'SEA' =
+    freightMode === 'sea'
+      ? 'SEA'
+      : baseFreight === 0
+      ? 'NONE'
+      : freightByCbm >= freightByKg
+      ? 'CBM'
+      : 'KG';
 
   const docChargeAmount = round2(baseFreight * docChargePct);
-  const freightWithDoc = round2(baseFreight + docChargeAmount);
-  const freightMarkupAmount = round2(freightWithDoc * activeMarkup);
+  const loadingChargeAmount = freightMode === 'sea' ? round2(baseFreight * loadingPct) : 0;
+  const freightWithDoc = round2(baseFreight + docChargeAmount + loadingChargeAmount);
+  const freightMarkupAmount = round2(freightWithDoc * freightMarkupPct);
   const customerFreight = round2(freightWithDoc + freightMarkupAmount);
 
   // Embedded internal VAT (already inside Unit Prices & goodsSubtotal — never added again!)
@@ -254,6 +282,10 @@ export function calculateJob(job: ProcurementJob): JobCalculationSummary {
     freightByCbm,
     freightByKg,
     freightBasis,
+    freightMode,
+    seaLines,
+    loadingChargeAmount,
+    freightMarkupPct,
     baseFreight,
     docChargeAmount,
     freightWithDoc,
@@ -315,7 +347,18 @@ export function validateForIssue(
   }
 
   // Freight is based on CBM: a line with boxes but an incomplete box size would silently understate it
-  if (prefix === "QT" || prefix === "PI" || prefix === "CI") {
+  if ((prefix === "QT" || prefix === "PI" || prefix === "CI") && job.freight.mode === "sea") {
+    const counts = job.freight.containers ?? { c20: 0, c40: 0, c40hc: 0 };
+    const rates = job.freight.containerRates ?? { c20: 0, c40: 0, c40hc: 0 };
+    const hasContainer = (Object.keys(counts) as (keyof ContainerCounts)[]).some((k) => (counts[k] ?? 0) > 0 && (rates[k] ?? 0) > 0);
+    if (!hasContainer) {
+      issues.push({
+        field: "seaFreight",
+        message: "Cannot issue yet: sea freight is selected but no container count and rate per container are entered on Price Calc.",
+      });
+    }
+  }
+  if ((prefix === "QT" || prefix === "PI" || prefix === "CI") && job.freight.mode !== "sea") {
     job.items.forEach((item, idx) => {
       const rowNumber = 17 + idx;
       const hasBoxes = (item.boxes ?? 0) > 0;
@@ -324,7 +367,7 @@ export function validateForIssue(
         issues.push({
           rowNumber,
           field: "boxDimensions",
-          message: `Cannot issue yet: row  has boxes but no full box size (L, W, H cm). Freight would be understated.`,
+          message: `Cannot issue yet: row ${rowNumber} has boxes but no full box size (L, W, H cm). Freight would be understated.`,
         });
       }
     });

@@ -259,6 +259,14 @@ export async function exportIssuedDocumentXlsx(
           numFmt: '#,##0.##',
           getValue: (row) => row.qty,
         };
+      case 'packages':
+        return {
+          key: 'packages',
+          header: 'Packages (boxes · L×W×H cm)',
+          width: 20,
+          align: 'center',
+          getValue: (row) => (row.boxes ? `${row.boxes} pkg${row.boxDims ? ` · ${row.boxDims}` : ''}` : ''),
+        };
       case 'carton':
         return {
           key: 'carton',
@@ -1021,11 +1029,62 @@ export async function exportJobTemplateXlsx(
   wsPC.getCell('M37').value = { formula: 'SUM(M17:M36)' };
   wsPC.getCell('M37').numFmt = '#,##0.00';
 
+  // Freight inputs (rows 5-8): air or sea, freight markup (own cell) and loading charge; sea containers in G5:L8
+  const freightIsSea = includeCurrentData && job.freight.mode === 'sea';
+  const freightMkp = includeCurrentData ? job.freight.freightMarkupPct ?? job.freight.selectedMarkupPct : 0.2;
+  const loadingPctX = includeCurrentData ? job.freight.loadingChargePct ?? 0.05 : 0.05;
+  const counts = includeCurrentData ? job.freight.containers ?? { c20: 0, c40: 0, c40hc: 0 } : { c20: 0, c40: 0, c40hc: 0 };
+  const cRates = includeCurrentData ? job.freight.containerRates ?? { c20: 0, c40: 0, c40hc: 0 } : { c20: 0, c40: 0, c40hc: 0 };
+  const inputStyle = (cell: ExcelJS.Cell) => {
+    cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.inputFont } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+  };
+  wsPC.mergeCells('B5:D5');
+  wsPC.getCell('B5').value = 'FREIGHT MODE (AIR / SEA):';
+  wsPC.getCell('B5').font = { name: 'Calibri', size: 9, bold: true };
+  wsPC.getCell('E5').value = freightIsSea ? 'SEA' : 'AIR';
+  inputStyle(wsPC.getCell('E5'));
+  wsPC.getCell('E5').dataValidation = { type: 'list', allowBlank: false, formulae: ['"AIR,SEA"'] };
+  wsPC.mergeCells('B6:D6');
+  wsPC.getCell('B6').value = 'FREIGHT MARKUP % (own, not E3):';
+  wsPC.getCell('B6').font = { name: 'Calibri', size: 9, bold: true };
+  wsPC.getCell('E6').value = freightMkp;
+  wsPC.getCell('E6').numFmt = '0.##%';
+  inputStyle(wsPC.getCell('E6'));
+  wsPC.mergeCells('B7:D7');
+  wsPC.getCell('B7').value = 'LOADING CHARGE % (sea only):';
+  wsPC.getCell('B7').font = { name: 'Calibri', size: 9, bold: true };
+  wsPC.getCell('E7').value = loadingPctX;
+  wsPC.getCell('E7').numFmt = '0.##%';
+  inputStyle(wsPC.getCell('E7'));
+  ['G5', 'J5', 'K5', 'L5'].forEach((ref, i) => {
+    wsPC.getCell(ref).value = ['Sea container', 'Containers', 'Rate / container', 'Freight'][i];
+    wsPC.getCell(ref).font = { name: 'Calibri', size: 9, bold: true, color: { argb: theme.excel.headerFont } };
+    wsPC.getCell(ref).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+  });
+  const seaRows: [number, string, keyof typeof counts][] = [
+    [6, "20' container", 'c20'],
+    [7, "40' container", 'c40'],
+    [8, "40' HC container", 'c40hc'],
+  ];
+  seaRows.forEach(([r, label, key]) => {
+    wsPC.mergeCells(`G${r}:I${r}`);
+    wsPC.getCell(`G${r}`).value = label;
+    wsPC.getCell(`J${r}`).value = counts[key] ?? 0;
+    wsPC.getCell(`K${r}`).value = cRates[key] ?? 0;
+    inputStyle(wsPC.getCell(`J${r}`));
+    inputStyle(wsPC.getCell(`K${r}`));
+    wsPC.getCell(`K${r}`).numFmt = '#,##0.00';
+    wsPC.getCell(`L${r}`).value = { formula: `ROUND(J${r}*K${r},2)` };
+    wsPC.getCell(`L${r}`).numFmt = '#,##0.00';
+  });
+
+  // Customer freight = (base + doc charge [+ loading for sea]) x (1 + freight markup E6). R41 feeds PROFORMA INVOICE!H39.
   const freightRows: [number, string, string][] = [
-    [38, 'Base Freight = MAX(CBM*Rate, KG*Rate)', 'MAX(K37*I3, M37*L3)'],
-    [39, 'Documentation Charge (Default 10%)', 'R38*O3'],
-    [40, 'Freight + Doc Charge Subtotal', 'R38+R39'],
-    [41, 'Customer Freight (With Selected Markup E3)', 'ROUND(R40*(1+E3),2)'],
+    [38, 'Base Freight: AIR = MAX(CBM*Rate, KG*Rate); SEA = containers', 'IF($E$5="SEA",SUM($L$6:$L$8),MAX(K37*I3,M37*L3))'],
+    [39, 'Documentation Charge (O3 %)', 'R38*O3'],
+    [40, 'Freight + Doc + Loading (sea) Subtotal', 'R38+R39+IF($E$5="SEA",R38*$E$7,0)'],
+    [41, 'Customer Freight (With Freight Markup E6)', 'ROUND(R40*(1+$E$6),2)'],
   ];
   freightRows.forEach(([r, lbl, formula]) => {
     wsPC.getRow(r).height = 22;

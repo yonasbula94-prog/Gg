@@ -88,6 +88,7 @@ export const DEFAULT_LOGISTICS_COLUMN_ORDER: string[] = [
   'offered',
   'uom',
   'qty',
+  'packages',
   'carton',
   'net_wt',
   'gross_wt',
@@ -323,7 +324,7 @@ export function resolveDocumentColumns(
       'uom',
       'qty',
       ...at('after_qty'),
-      ...(isLogistics ? ['carton', 'net_wt', 'gross_wt'] : ['unit_val', 'total_val']),
+      ...(isLogistics ? ['packages', 'carton', 'net_wt', 'gross_wt'] : ['unit_val', 'total_val']),
       ...at('end'),
     ];
   };

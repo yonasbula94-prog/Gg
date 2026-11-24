@@ -19,6 +19,7 @@ import {
 import { formatMoney, formatNumber, formatPct } from '../utils/calculations';
 import { HelpTip } from './HelpTip';
 import { IPadJobEditor } from './IPadJobEditor';
+import { FreightPanel } from './FreightPanel';
 
 interface PriceCalcViewProps {
   job: ProcurementJob;
@@ -298,6 +299,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
         </div>
 
         {/* Freight Rates & Doc Charge Row */}
+        {job.freight.mode !== 'sea' && (
         <div className="pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1.5">
@@ -331,26 +333,16 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
               className="w-full min-h-[42px] rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm font-mono-tabular text-blue-700 font-medium focus:border-slate-900 focus:bg-white focus:outline-none"
             />
           </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1.5">
-              Doc Charge % (Default 10%)
-            </label>
-            <input
-              type="number"
-              inputMode="decimal"
-              step="0.5"
-              min="0"
-              max="100"
-              value={Math.round((job.freight.docChargePct * 100 + Number.EPSILON) * 100) / 100}
-              onChange={(e) =>
-                guardFreight({
-                  docChargePct: Math.min(100, Math.max(0, Number(e.target.value) || 0)) / 100,
-                })
-              }
-              className="w-full min-h-[42px] rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm font-mono-tabular text-blue-700 font-medium focus:border-slate-900 focus:bg-white focus:outline-none"
-            />
-          </div>
         </div>
+        )}
+        <FreightPanel
+          freight={job.freight}
+          calc={calc}
+          curr={curr}
+          disabled={isIssued}
+          primary={theme.primary}
+          onChange={guardFreight}
+        />
       </div>
 
       {/* Active Custom Markup Card when using a non-preset % */}

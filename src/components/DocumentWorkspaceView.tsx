@@ -392,6 +392,8 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
         return { label: 'UoM', align: 'center', widthClass: forPreview ? 'w-16' : 'w-20' };
       case 'qty':
         return { label: 'Qty', align: 'right', widthClass: forPreview ? 'w-16' : 'w-20' };
+      case 'packages':
+        return { label: 'Packages (boxes · L×W×H cm)', align: 'center', widthClass: forPreview ? 'w-32' : 'w-36' };
       case 'carton':
         return { label: 'Carton No.', align: 'center', widthClass: forPreview ? 'w-24' : 'w-28' };
       case 'net_wt':
@@ -1825,6 +1827,13 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                                 )}
                               </td>
                             );
+                          case 'packages':
+                            return (
+                              <td key={colKey} className="py-2 px-2 text-center font-mono-tabular text-slate-700">
+                                {row.boxes ? `${row.boxes} pkg` : '—'}
+                                {row.boxDims && <div className="text-[11px] text-slate-500">{row.boxDims} cm</div>}
+                              </td>
+                            );
                           case 'carton':
                             return (
                               <td key={colKey} className="p-1">
@@ -2168,6 +2177,13 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                                     className="py-2.5 px-2 text-right font-mono-tabular"
                                   >
                                     {row.qty}
+                                  </td>
+                                );
+                              case 'packages':
+                                return (
+                                  <td key={colKey} className="py-2.5 px-2 text-center font-mono-tabular">
+                                    {row.boxes ? `${row.boxes} pkg` : '—'}
+                                    {row.boxDims && <div className="text-[11px] text-slate-500">{row.boxDims} cm</div>}
                                   </td>
                                 );
                               case 'carton':
