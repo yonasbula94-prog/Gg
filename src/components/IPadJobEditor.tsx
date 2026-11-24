@@ -1,12 +1,12 @@
 import React from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { EXCEL_THEMES, MARKUP_RATES, UOM_OPTIONS } from '../constants/themes';
+import { MARKUP_RATES, UOM_OPTIONS } from '../constants/themes';
 import {
   ComputedRow,
   ConfirmDialogRequest,
   CustomColumnDef,
   JobItemRow,
-  ThemeVariantId,
+  ThemePalette,
 } from '../types/procurement';
 import { formatMoney, formatNumber, formatPct } from '../utils/calculations';
 
@@ -16,7 +16,7 @@ interface IPadJobEditorProps {
   computedRows: ComputedRow[];
   customColumns?: CustomColumnDef[];
   currency: string;
-  themeId: ThemeVariantId;
+  theme: ThemePalette;
   activeMarkupPct?: number;
   effectiveVatRate?: number;
   disabled?: boolean;
@@ -36,14 +36,13 @@ export const IPadJobEditor: React.FC<IPadJobEditorProps> = ({
   computedRows,
   customColumns = [],
   currency,
-  themeId,
+  theme,
   activeMarkupPct = 0.2,
   effectiveVatRate = 0.05,
   disabled = false,
   onUpdateItem,
   onRequestConfirm,
 }) => {
-  const theme = EXCEL_THEMES[themeId];
   const isCustomMarkup = !MARKUP_RATES.some((r) => Math.abs(r - activeMarkupPct) < 0.0001);
 
   // Show all populated rows (or first row if none populated yet) so iPad users never scroll through 16 blank rows

@@ -1,17 +1,16 @@
 import React, { useEffect } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { EXCEL_THEMES } from '../constants/themes';
-import { ConfirmDialogRequest, ThemeVariantId } from '../types/procurement';
+import { ConfirmDialogRequest, ThemePalette } from '../types/procurement';
 
 interface ConfirmDialogProps {
   request: ConfirmDialogRequest | null;
-  themeId: ThemeVariantId;
+  theme: ThemePalette;
   onClose: () => void;
 }
 
 export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   request,
-  themeId,
+  theme,
   onClose,
 }) => {
   useEffect(() => {
@@ -27,7 +26,6 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
 
   if (!request) return null;
 
-  const theme = EXCEL_THEMES[themeId];
   const isDestructive = request.destructive !== false;
 
   return (

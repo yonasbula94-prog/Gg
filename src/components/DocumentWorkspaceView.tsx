@@ -1,21 +1,27 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
+  ArrowLeft,
+  ArrowRight,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  Eye,
   FileSpreadsheet,
   Lock,
   Plus,
   Printer,
-  Copy,
-  Eye,
+  RotateCcw,
+  SlidersHorizontal,
   Table as TableIcon,
   X,
 } from 'lucide-react';
 import {
   CURRENCY_OPTIONS,
   DOC_META,
-  EXCEL_THEMES,
   INCOTERM_OPTIONS,
+  resolveDocumentColumns,
   UOM_OPTIONS,
 } from '../constants/themes';
 import {
@@ -29,8 +35,9 @@ import {
   JobItemRow,
   PlatformMode,
   ProcurementJob,
-  ThemeVariantId,
+  ThemePalette,
   ValidationIssue,
+  WorkspaceTab,
 } from '../types/procurement';
 import {
   formatMoney,
@@ -39,22 +46,24 @@ import {
   validateForIssue,
 } from '../utils/calculations';
 import { exportIssuedDocumentXlsx } from '../utils/excelEngine';
+import { HelpTip } from './HelpTip';
 import { IPadJobEditor } from './IPadJobEditor';
 
 interface DocumentWorkspaceViewProps {
   job: ProcurementJob;
   prefix: DocPrefix;
   calc: JobCalculationSummary;
-  themeId: ThemeVariantId;
+  theme: ThemePalette;
   company: CompanyProfile;
   platformMode: PlatformMode;
-  nextSeq: number;
   onUpdateJobName: (name: string) => void;
   onUpdateControls: (patch: Partial<JobControls>) => void;
-  onUpdateCustomColumns: (cols: CustomColumnDef[]) => void;
+  onUpdateCustomColumns: (cols: CustomColumnDef[], nextOrder?: string[]) => void;
+  onUpdateColumnOrder: (order: string[] | undefined) => void;
   onUpdateItem: (rowNumber: number, patch: Partial<JobItemRow>) => void;
   onIssueDocument: (prefix: DocPrefix) => void;
   onDuplicateAsNewJob: () => void;
+  onNavigateTab: (tab: WorkspaceTab) => void;
   onRequestConfirm: (req: ConfirmDialogRequest) => void;
   onNotify: (msg: string) => void;
 }
@@ -86,20 +95,25 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
   job,
   prefix,
   calc,
-  themeId,
+  theme,
   company,
   platformMode,
-  nextSeq,
   onUpdateJobName,
   onUpdateControls,
   onUpdateCustomColumns,
+  onUpdateColumnOrder,
   onUpdateItem,
   onIssueDocument,
   onDuplicateAsNewJob,
+  onNavigateTab,
   onRequestConfirm,
   onNotify,
 }) => {
   const [subView, setSubView] = useState<'edit' | 'preview'>(prefix === 'PI' ? 'edit' : 'preview');
+  const [controlsOpen, setControlsOpen] = useState(true);
+  const [remarksOpen, setRemarksOpen] = useState(false);
+  const [extraColsOpen, setExtraColsOpen] = useState(false);
+  const [dragColKey, setDragColKey] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<ValidationIssue[]>([]);
   const [exporting, setExporting] = useState(false);
   const [newColLabel, setNewColLabel] = useState('');
@@ -114,9 +128,76 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
     };
   }, []);
 
+  const meta = DOC_META[prefix];
+  const issued = job.issuedDocs[prefix];
+  const isLocked = Boolean(issued && !issued.isVoided);
+  const isLogistics = prefix === 'PL' || prefix === 'DN';
+  const isPO = prefix === 'PO';
+  const endUser = getResolvedEndUser(job);
+  const curr = job.controls.currency;
+  const activeRows = calc.rows.filter((r) => !r.isEmpty);
   const customColumns = job.customColumns || [];
-  const colsAt = (pos: CustomColumnPosition) =>
-    customColumns.filter((c) => (c.position || 'after_no') === pos);
+  const customColMap = new Map(customColumns.map((c) => [`custom:${c.id}`, c]));
+
+  // Unified ordered column keys for both Edit Schedule and A4 Print Preview
+  const orderedColKeys = resolveDocumentColumns(job.columnOrder, customColumns, isLogistics);
+  const defaultOrder = resolveDocumentColumns(undefined, customColumns, isLogistics);
+  const hasCustomOrder =
+    orderedColKeys.length === defaultOrder.length &&
+    orderedColKeys.some((k, idx) => k !== defaultOrder[idx]);
+
+  const spliceKeyIntoOrder = (
+    baseOrder: string[],
+    newKey: string,
+    position: CustomColumnPosition
+  ): string[] => {
+    const next = baseOrder.filter((k) => k !== newKey);
+    if (position === 'after_no') {
+      next.unshift(newKey);
+    } else if (position === 'after_requested') {
+      const idx = next.indexOf('requested');
+      next.splice(idx >= 0 ? idx + 1 : 0, 0, newKey);
+    } else if (position === 'after_offered') {
+      const idx = next.indexOf('offered');
+      next.splice(idx >= 0 ? idx + 1 : next.length, 0, newKey);
+    } else if (position === 'after_qty') {
+      const idx = next.indexOf('qty');
+      next.splice(idx >= 0 ? idx + 1 : next.length, 0, newKey);
+    } else {
+      next.push(newKey);
+    }
+    return next;
+  };
+
+  // Merge updated order back into the master cross-document columnOrder (preserving pricing/logistics-only keys)
+  const commitReorderedVisibleKeys = (nextVisible: string[]) => {
+    const existing = job.columnOrder || [];
+    const visibleSet = new Set(nextVisible);
+    const otherKeys = existing.filter((k) => !visibleSet.has(k));
+    onUpdateColumnOrder([...nextVisible, ...otherKeys]);
+  };
+
+  const handleMoveColumnByOffset = (key: string, delta: -1 | 1) => {
+    if (isLocked) return;
+    const idx = orderedColKeys.indexOf(key);
+    const target = idx + delta;
+    if (idx < 0 || target < 0 || target >= orderedColKeys.length) return;
+    const next = [...orderedColKeys];
+    const [moved] = next.splice(idx, 1);
+    next.splice(target, 0, moved);
+    commitReorderedVisibleKeys(next);
+  };
+
+  const handleDropColumn = (sourceKey: string, targetKey: string) => {
+    if (isLocked || !sourceKey || sourceKey === targetKey) return;
+    const fromIdx = orderedColKeys.indexOf(sourceKey);
+    const toIdx = orderedColKeys.indexOf(targetKey);
+    if (fromIdx < 0 || toIdx < 0) return;
+    const next = [...orderedColKeys];
+    const [moved] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, moved);
+    commitReorderedVisibleKeys(next);
+  };
 
   const handleAddCustomColumn = (labelRaw: string, position: CustomColumnPosition = newColPosition) => {
     const label = labelRaw.trim();
@@ -130,7 +211,11 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
       return;
     }
     const id = `col_${label.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_${Date.now().toString(36).slice(-3)}`;
-    onUpdateCustomColumns([...customColumns, { id, label, position }]);
+    const nextCols = [...customColumns, { id, label, position }];
+    const nextOrder = job.columnOrder
+      ? spliceKeyIntoOrder(job.columnOrder, `custom:${id}`, position)
+      : undefined;
+    onUpdateCustomColumns(nextCols, nextOrder);
     setNewColLabel('');
     const posLabel = CUSTOM_COLUMN_POSITIONS.find((p) => p.value === position)?.label || 'After No.';
     onNotify(`Added "${label}" (${posLabel}) across all 6 documents and Excel exports.`);
@@ -138,9 +223,11 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
 
   const handleMoveCustomColumn = (id: string, position: CustomColumnPosition) => {
     if (isLocked) return;
-    onUpdateCustomColumns(
-      customColumns.map((c) => (c.id === id ? { ...c, position } : c))
-    );
+    const nextCols = customColumns.map((c) => (c.id === id ? { ...c, position } : c));
+    const nextOrder = job.columnOrder
+      ? spliceKeyIntoOrder(job.columnOrder, `custom:${id}`, position)
+      : undefined;
+    onUpdateCustomColumns(nextCols, nextOrder);
   };
 
   const handleRemoveCustomColumn = (id: string) => {
@@ -152,7 +239,11 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
     ).length;
 
     const removeNow = () => {
-      onUpdateCustomColumns(customColumns.filter((c) => c.id !== id));
+      const nextCols = customColumns.filter((c) => c.id !== id);
+      const nextOrder = job.columnOrder
+        ? job.columnOrder.filter((k) => k !== `custom:${id}`)
+        : undefined;
+      onUpdateCustomColumns(nextCols, nextOrder);
     };
 
     if (populatedCount > 0) {
@@ -168,16 +259,6 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
     }
   };
 
-  const theme = EXCEL_THEMES[themeId];
-  const meta = DOC_META[prefix];
-  const issued = job.issuedDocs[prefix];
-  const isLocked = Boolean(issued && !issued.isVoided);
-  const isLogistics = prefix === 'PL' || prefix === 'DN';
-  const isPO = prefix === 'PO';
-  const endUser = getResolvedEndUser(job);
-  const curr = job.controls.currency;
-  const activeRows = calc.rows.filter((r) => !r.isEmpty);
-
   const handleTryIssue = () => {
     const errors = validateForIssue(job, prefix, calc);
     if (errors.length > 0) {
@@ -191,7 +272,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
   const handleExportXlsx = async () => {
     setExporting(true);
     try {
-      const filename = await exportIssuedDocumentXlsx(job, prefix, themeId, company);
+      const filename = await exportIssuedDocumentXlsx(job, prefix, theme, company);
       onNotify(`Exported values-only Excel file: ${filename}`);
     } catch {
       onNotify('Failed to generate Excel file. Please try again.');
@@ -218,11 +299,94 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
     }
   };
 
-  const nextPreviewDocNo = `${prefix}-GG-${String(nextSeq).padStart(3, '0')}-${new Date().getFullYear()}`;
-  const displayDocNo = issued ? issued.docNumber : `DRAFT (Next: ${nextPreviewDocNo})`;
-  const displayDate = issued
+  // Never show "DRAFT (Next: ...)" on A4 print, Excel preview, or PDF print — only render doc no. once issued
+  const issuedDocNo = isLocked && issued ? issued.docNumber : '';
+  const displayDate = isLocked && issued
     ? issued.issuedAt.slice(0, 10)
     : new Date().toISOString().slice(0, 10);
+
+  const getColumnHeaderMeta = (
+    key: string,
+    forPreview: boolean
+  ): { label: string; align: 'left' | 'center' | 'right'; widthClass: string } => {
+    if (key.startsWith('custom:')) {
+      const cc = customColMap.get(key);
+      return {
+        label: cc?.label || 'Custom',
+        align: 'left',
+        widthClass: forPreview ? '' : 'min-w-[125px]',
+      };
+    }
+    switch (key) {
+      case 'requested':
+        return {
+          label: 'Requested Description',
+          align: 'left',
+          widthClass: forPreview ? '' : 'min-w-[210px]',
+        };
+      case 'offered':
+        return {
+          label: 'Offered Description',
+          align: 'left',
+          widthClass: forPreview ? '' : 'min-w-[230px]',
+        };
+      case 'uom':
+        return { label: 'UoM', align: 'center', widthClass: forPreview ? 'w-16' : 'w-20' };
+      case 'qty':
+        return { label: 'Qty', align: 'right', widthClass: forPreview ? 'w-16' : 'w-20' };
+      case 'carton':
+        return { label: 'Carton No.', align: 'center', widthClass: forPreview ? 'w-24' : 'w-28' };
+      case 'net_wt':
+        return { label: 'Net Wt (KG)', align: 'right', widthClass: 'w-24' };
+      case 'gross_wt':
+        return { label: 'Gross Wt (KG)', align: 'right', widthClass: 'w-24' };
+      case 'unit_val':
+        return isPO
+          ? {
+              label: forPreview ? `Unit Cost (${curr})` : 'Unit Cost',
+              align: 'right',
+              widthClass: 'w-28',
+            }
+          : {
+              label: forPreview ? `Unit Price (${curr})` : 'Unit Price (Col R)',
+              align: 'right',
+              widthClass: 'w-28',
+            };
+      case 'total_val':
+        return isPO
+          ? {
+              label: forPreview ? `Total Cost (${curr})` : 'Total Cost',
+              align: 'right',
+              widthClass: 'w-32',
+            }
+          : {
+              label: forPreview ? `Total Price (${curr})` : 'Total Price',
+              align: 'right',
+              widthClass: 'w-32',
+            };
+      default:
+        return { label: key, align: 'left', widthClass: '' };
+    }
+  };
+
+  const controlsSummary =
+    prefix === 'PO'
+      ? `${job.controls.supplierName || 'No Supplier'} · ${job.controls.supplierRef || 'No Ref'}`
+      : prefix === 'PL'
+      ? `${job.controls.shipDate || 'No Ship Date'} · ${job.controls.portOfLoading || '—'}`
+      : prefix === 'DN'
+      ? `${job.controls.deliveryDate || 'No Delivery Date'} · ${job.controls.transportRef || '—'}`
+      : prefix === 'QT'
+      ? `${job.controls.rfqRef || 'No RFQ Ref'} · ${job.controls.deliveryLeadTime || '—'}`
+      : prefix === 'CI'
+      ? `${job.controls.customerPoRef || 'No PO Ref'} · ${job.controls.incoterm} ${job.controls.destination}`
+      : `${endUser || 'No End User'} · ${curr} · ${job.controls.incoterm} ${job.controls.destination}`;
+
+  const remarksFilledCount = [
+    job.controls.remarks.trim(),
+    (job.controls.authorizedSignatory ?? '').trim(),
+    (job.controls.counterpartySignatory ?? '').trim(),
+  ].filter(Boolean).length;
 
   return (
     <div className="space-y-5">
@@ -257,19 +421,15 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
             </button>
           </div>
 
-          {/* Clean unboxed status metadata */}
-          <div className="text-xs text-slate-600 flex items-center gap-2 font-mono-tabular">
-            {isLocked ? (
+          {/* Show Issued badge ONLY when document has been formally issued */}
+          {isLocked && issued && (
+            <div className="text-xs flex items-center gap-2 font-mono-tabular">
               <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700">
                 <CheckCircle2 className="w-3.5 h-3.5" />
-                Issued · {issued?.docNumber}
+                Issued · {issued.docNumber}
               </span>
-            ) : (
-              <span className="text-slate-500">
-                Draft · Next Registry No. {nextPreviewDocNo}
-              </span>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Right Actions: Issue, Export Values-Only .xlsx, Print PDF */}
@@ -339,7 +499,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
       {isLocked && subView === 'edit' && (
         <div className="no-print rounded-lg border border-emerald-200 bg-emerald-50/70 px-4 py-3 text-xs text-emerald-900 flex items-center justify-between gap-3">
           <span>
-            <strong>{issued?.docNumber}</strong> is frozen and logged in the Master Registry. Each document tab can be issued once per job.
+            <strong>{issued?.docNumber}</strong> is frozen and logged in the Master Registry.
           </span>
           <button
             type="button"
@@ -353,336 +513,532 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
 
       {/* ==================== EDIT / CONTROLS SUBVIEW ==================== */}
       {subView === 'edit' && (
-        <div className="no-print space-y-6">
-          {/* Job Header & Controls Block (K:L equivalent + Stage-specific fields) */}
-          <div className="rounded-lg border border-slate-200 bg-white p-5 space-y-5">
-            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
-              <div>
-                <h2 className="text-sm font-semibold text-slate-900">
-                  {prefix === 'PI'
-                    ? 'Master Job Controls & End-User Selection (PI Cell C8 & Block K:L)'
-                    : `${meta.shortName} Specific Fields`}
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Changes propagate automatically across all linked documents.
-                </p>
+        <div className="no-print space-y-4">
+          {/* Collapsible 1: Master Job Controls (on PI) OR Document-Specific Inputs (on QT/PO/PL/DN/CI) */}
+          <div className="rounded-lg border border-slate-200 bg-white overflow-visible">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 hover:bg-slate-50/70 transition-colors rounded-t-lg">
+              <div className="flex items-center gap-2 min-w-0">
+                <button
+                  type="button"
+                  onClick={() => setControlsOpen((v) => !v)}
+                  aria-expanded={controlsOpen}
+                  className="flex items-center gap-2 text-left cursor-pointer min-w-0"
+                >
+                  {controlsOpen ? (
+                    <ChevronDown className="w-4 h-4 text-slate-500 shrink-0" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
+                  )}
+                  <h2 className="text-sm font-semibold text-slate-900">
+                    {prefix === 'PI'
+                      ? 'Master Job Controls'
+                      : `${meta.shortName} Inputs`}
+                  </h2>
+                </button>
+                <HelpTip
+                  text={
+                    prefix === 'PI'
+                      ? 'Universal Master Job Controls (PI Cell C8 & Block K:L). Changes entered here automatically propagate across Quotation, Supplier PO, Packing List, Delivery Note, Commercial Invoice, and Excel workbooks.'
+                      : `Fields specific to ${meta.shortName}. Shared client, currency, and line-item controls live on the Proforma Invoice (PI) master sheet.`
+                  }
+                />
               </div>
-              <span className="text-xs text-slate-500 font-mono-tabular">
-                {meta.stageLabel} · {meta.sheetName}
-              </span>
+
+              <button
+                type="button"
+                onClick={() => setControlsOpen((v) => !v)}
+                className="flex items-center gap-3 text-xs text-slate-500 min-w-0 cursor-pointer"
+              >
+                {!controlsOpen && (
+                  <span className="truncate max-w-[320px] font-medium text-slate-600">
+                    {controlsSummary}
+                  </span>
+                )}
+                <span className="font-mono-tabular shrink-0">{meta.sheetName}</span>
+              </button>
             </div>
 
-            {prefix === 'PO' ? (
-              /* Supplier PO specific header controls */
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Supplier Name (Required for PO)
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.supplierName}
-                    onChange={(e) => onUpdateControls({ supplierName: e.target.value })}
-                    placeholder="e.g. Al-Futtaim Industrial Supplies"
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Supplier Quote Reference
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.supplierRef}
-                    onChange={(e) => onUpdateControls({ supplierRef: e.target.value })}
-                    placeholder="SQ-2026-..."
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Supplier Address
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.supplierAddress}
-                    onChange={(e) => onUpdateControls({ supplierAddress: e.target.value })}
-                    placeholder="Dubai, UAE"
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
-              </div>
-            ) : prefix === 'PL' ? (
-              /* Packing List specific controls */
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Ship Date (Required for PL)
-                  </label>
-                  <input
-                    type="date"
-                    disabled={isLocked}
-                    value={job.controls.shipDate}
-                    onChange={(e) => onUpdateControls({ shipDate: e.target.value })}
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Port of Loading
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.portOfLoading}
-                    onChange={(e) => onUpdateControls({ portOfLoading: e.target.value })}
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Destination
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.destination}
-                    onChange={(e) => onUpdateControls({ destination: e.target.value })}
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
-              </div>
-            ) : prefix === 'DN' ? (
-              /* Delivery Note specific controls */
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Delivery Date (Required for DN)
-                  </label>
-                  <input
-                    type="date"
-                    disabled={isLocked}
-                    value={job.controls.deliveryDate}
-                    onChange={(e) => onUpdateControls({ deliveryDate: e.target.value })}
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Transport / BL / Truck Ref. (Required)
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.transportRef}
-                    onChange={(e) => onUpdateControls({ transportRef: e.target.value })}
-                    placeholder="BL-MSC-... / Truck Plate"
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Received By (Consignee Contact)
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.receivedBy}
-                    onChange={(e) => onUpdateControls({ receivedBy: e.target.value })}
-                    placeholder="Warehouse Manager / Receiver"
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
-              </div>
-            ) : (
-              /* Primary PI / QT / CI Job Controls */
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="lg:col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Job Title / Internal Reference
-                  </label>
-                  <input
-                    type="text"
-                    value={job.jobName}
-                    onChange={(e) => onUpdateJobName(e.target.value)}
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-900 focus:border-slate-900 focus:outline-none"
-                  />
-                </div>
-
-                <div className="lg:col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    TO — End User (PI Cell C8 · {company.endUsers.length} End Users)
-                  </label>
-                  <select
-                    disabled={isLocked}
-                    value={job.controls.endUserSelect}
-                    onChange={(e) => onUpdateControls({ endUserSelect: e.target.value })}
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  >
-                    {company.endUsers.map((opt) => (
-                      <option key={opt} value={opt}>
-                        {opt}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {job.controls.endUserSelect === 'OTHER' && (
-                  <div className="lg:col-span-2">
-                    <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                      Custom End-User Name (OTHER)
-                    </label>
-                    <input
-                      type="text"
-                      disabled={isLocked}
-                      value={job.controls.customEndUser}
-                      onChange={(e) => onUpdateControls({ customEndUser: e.target.value })}
-                      placeholder="Type end-user organization name..."
-                      className="w-full min-h-[42px] rounded-lg border border-slate-900 px-3 py-2 text-sm text-blue-700 focus:outline-none"
-                    />
+            {controlsOpen && (
+              <div className="px-5 pb-5 pt-2 border-t border-slate-100 space-y-4">
+                {prefix !== 'PI' && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3.5 py-2 text-xs text-slate-600">
+                    <span className="truncate">
+                      Master Job: <strong className="text-slate-900">{job.jobName}</strong> ·{' '}
+                      {endUser || 'Unassigned End User'} · {curr}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onNavigateTab('PI')}
+                      className="inline-flex items-center gap-1 font-semibold text-blue-700 hover:underline cursor-pointer whitespace-nowrap"
+                    >
+                      <SlidersHorizontal className="w-3.5 h-3.5" />
+                      <span>Edit Master Controls on PI</span>
+                    </button>
                   </div>
                 )}
 
-                <div className="lg:col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    End-User Contact / ATTN
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.endUserContact}
-                    onChange={(e) => onUpdateControls({ endUserContact: e.target.value })}
-                    placeholder="e.g. Procurement Department / Contact Name"
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
+                {prefix === 'PO' ? (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600 mb-1.5">
+                        <span>Supplier Name</span>
+                        <HelpTip text="Required before issuing Supplier PO." />
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.supplierName}
+                        onChange={(e) => onUpdateControls({ supplierName: e.target.value })}
+                        placeholder="e.g. Al-Futtaim Industrial Supplies"
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Supplier Quote Reference
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.supplierRef}
+                        onChange={(e) => onUpdateControls({ supplierRef: e.target.value })}
+                        placeholder="SQ-2026-..."
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Supplier Address
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.supplierAddress}
+                        onChange={(e) => onUpdateControls({ supplierAddress: e.target.value })}
+                        placeholder="Dubai, UAE"
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                  </div>
+                ) : prefix === 'PL' ? (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600 mb-1.5">
+                        <span>Ship Date</span>
+                        <HelpTip text="Required before issuing Packing List." />
+                      </label>
+                      <input
+                        type="date"
+                        disabled={isLocked}
+                        value={job.controls.shipDate}
+                        onChange={(e) => onUpdateControls({ shipDate: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Port of Loading
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.portOfLoading}
+                        onChange={(e) => onUpdateControls({ portOfLoading: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Destination
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.destination}
+                        onChange={(e) => onUpdateControls({ destination: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                  </div>
+                ) : prefix === 'DN' ? (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600 mb-1.5">
+                        <span>Delivery Date</span>
+                        <HelpTip text="Required before issuing Delivery Note." />
+                      </label>
+                      <input
+                        type="date"
+                        disabled={isLocked}
+                        value={job.controls.deliveryDate}
+                        onChange={(e) => onUpdateControls({ deliveryDate: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                    <div>
+                      <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600 mb-1.5">
+                        <span>Transport / BL / Truck Ref.</span>
+                        <HelpTip text="Required before issuing Delivery Note." />
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.transportRef}
+                        onChange={(e) => onUpdateControls({ transportRef: e.target.value })}
+                        placeholder="BL-MSC-... / Truck Plate"
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Received By
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.receivedBy}
+                        onChange={(e) => onUpdateControls({ receivedBy: e.target.value })}
+                        placeholder="Warehouse Manager / Receiver"
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                  </div>
+                ) : prefix === 'QT' ? (
+                  /* Quotation-specific inputs only */
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        RFQ / Tender Ref.
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.rfqRef}
+                        onChange={(e) => onUpdateControls({ rfqRef: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Delivery Lead Time
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.deliveryLeadTime}
+                        onChange={(e) => onUpdateControls({ deliveryLeadTime: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Payment Terms
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.paymentTerms}
+                        onChange={(e) => onUpdateControls({ paymentTerms: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                  </div>
+                ) : prefix === 'CI' ? (
+                  /* Commercial Invoice-specific inputs only (mirrors PI closely on print) */
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Customer PO Ref.
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.customerPoRef}
+                        onChange={(e) => onUpdateControls({ customerPoRef: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Payment Terms
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.paymentTerms}
+                        onChange={(e) => onUpdateControls({ paymentTerms: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Destination
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.destination}
+                        onChange={(e) => onUpdateControls({ destination: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  /* PI: Universal Master Job Controls */
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="lg:col-span-2">
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Job Title / Reference
+                      </label>
+                      <input
+                        type="text"
+                        value={job.jobName}
+                        onChange={(e) => onUpdateJobName(e.target.value)}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-900 focus:border-slate-900 focus:outline-none"
+                      />
+                    </div>
 
-                <div className="lg:col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    End-User Address
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.endUserAddress}
-                    onChange={(e) => onUpdateControls({ endUserAddress: e.target.value })}
-                    placeholder="e.g. Asmara, Eritrea"
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
+                    <div className="lg:col-span-2">
+                      <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600 mb-1.5">
+                        <span>TO — End User</span>
+                        <HelpTip text={`Linked to PI Cell C8 (${company.endUsers.length} configured end users). Choose OTHER to type a custom organization name.`} />
+                      </label>
+                      <select
+                        disabled={isLocked}
+                        value={job.controls.endUserSelect}
+                        onChange={(e) => {
+                          const selected = e.target.value;
+                          const savedAddress =
+                            selected === 'OTHER'
+                              ? ''
+                              : company.endUserAddresses?.[selected] || '';
+                          onUpdateControls({
+                            endUserSelect: selected,
+                            endUserAddress: savedAddress,
+                            endUserContact: '',
+                          });
+                        }}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      >
+                        {company.endUsers.map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Currency (K3:L3)
-                  </label>
-                  <select
-                    disabled={isLocked}
-                    value={job.controls.currency}
-                    onChange={(e) => onUpdateControls({ currency: e.target.value })}
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  >
-                    {CURRENCY_OPTIONS.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
+                    {job.controls.endUserSelect === 'OTHER' && (
+                      <div className="lg:col-span-2">
+                        <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                          Custom End-User Name
+                        </label>
+                        <input
+                          type="text"
+                          disabled={isLocked}
+                          value={job.controls.customEndUser}
+                          onChange={(e) => onUpdateControls({ customEndUser: e.target.value })}
+                          placeholder="Type end-user organization name..."
+                          className="w-full min-h-[42px] rounded-lg border border-slate-900 px-3 py-2 text-sm text-blue-700 focus:outline-none"
+                        />
+                      </div>
+                    )}
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Incoterm (K4:L4)
-                  </label>
-                  <select
-                    disabled={isLocked}
-                    value={job.controls.incoterm}
-                    onChange={(e) => onUpdateControls({ incoterm: e.target.value })}
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  >
-                    {INCOTERM_OPTIONS.map((inc) => (
-                      <option key={inc} value={inc}>{inc}</option>
-                    ))}
-                  </select>
-                </div>
+                    <div className="lg:col-span-2">
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        End-User Contact / ATTN
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.endUserContact}
+                        onChange={(e) => onUpdateControls({ endUserContact: e.target.value })}
+                        placeholder="e.g. Procurement Department"
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Destination (K5:L5)
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.destination}
-                    onChange={(e) => onUpdateControls({ destination: e.target.value })}
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
+                    <div className="lg:col-span-2">
+                      <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600 mb-1.5">
+                        <span>Address</span>
+                        {job.controls.endUserSelect !== 'OTHER' && (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-400">
+                            <Lock className="w-3 h-3" />
+                            <span>From Directory</span>
+                          </span>
+                        )}
+                        <HelpTip
+                          text={
+                            job.controls.endUserSelect !== 'OTHER'
+                              ? 'Locked on PI because this client is managed in Clients & Settings → End-User Directory. Edit saved addresses there, or choose OTHER for a one-off custom client.'
+                              : 'Enter the address for this custom client.'
+                          }
+                        />
+                      </label>
+                      <input
+                        type="text"
+                        readOnly={job.controls.endUserSelect !== 'OTHER'}
+                        disabled={isLocked || job.controls.endUserSelect !== 'OTHER'}
+                        value={
+                          job.controls.endUserSelect !== 'OTHER'
+                            ? (company.endUserAddresses?.[job.controls.endUserSelect] ??
+                                job.controls.endUserAddress)
+                            : job.controls.endUserAddress
+                        }
+                        onChange={(e) => {
+                          if (job.controls.endUserSelect === 'OTHER') {
+                            onUpdateControls({ endUserAddress: e.target.value });
+                          }
+                        }}
+                        placeholder={
+                          job.controls.endUserSelect !== 'OTHER'
+                            ? 'Set in Clients & Settings → End-User Directory'
+                            : 'e.g. Asmara, Eritrea'
+                        }
+                        className={`w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none ${
+                          job.controls.endUserSelect !== 'OTHER'
+                            ? 'bg-slate-50 text-slate-600 cursor-not-allowed'
+                            : 'text-blue-700 disabled:bg-slate-50'
+                        }`}
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    RFQ / Tender Ref.
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.rfqRef}
-                    onChange={(e) => onUpdateControls({ rfqRef: e.target.value })}
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Currency
+                      </label>
+                      <select
+                        disabled={isLocked}
+                        value={job.controls.currency}
+                        onChange={(e) => onUpdateControls({ currency: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      >
+                        {CURRENCY_OPTIONS.map((c) => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                    </div>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Customer PO Ref.
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.customerPoRef}
-                    onChange={(e) => onUpdateControls({ customerPoRef: e.target.value })}
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Incoterm
+                      </label>
+                      <select
+                        disabled={isLocked}
+                        value={job.controls.incoterm}
+                        onChange={(e) => onUpdateControls({ incoterm: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      >
+                        {INCOTERM_OPTIONS.map((inc) => (
+                          <option key={inc} value={inc}>{inc}</option>
+                        ))}
+                      </select>
+                    </div>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Payment Terms
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.paymentTerms}
-                    onChange={(e) => onUpdateControls({ paymentTerms: e.target.value })}
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Destination
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.destination}
+                        onChange={(e) => onUpdateControls({ destination: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Delivery Lead Time
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.deliveryLeadTime}
-                    onChange={(e) => onUpdateControls({ deliveryLeadTime: e.target.value })}
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        RFQ / Tender Ref.
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.rfqRef}
+                        onChange={(e) => onUpdateControls({ rfqRef: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Customer PO Ref.
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.customerPoRef}
+                        onChange={(e) => onUpdateControls({ customerPoRef: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Payment Terms
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.paymentTerms}
+                        onChange={(e) => onUpdateControls({ paymentTerms: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+
+                    <div className="lg:col-span-2">
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Delivery Lead Time
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.deliveryLeadTime}
+                        onChange={(e) => onUpdateControls({ deliveryLeadTime: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
+          </div>
 
-            {/* Editable Per-Job Remarks & Signature Lines (Available on ALL 6 Documents — Leave Blank to Omit) */}
-            <div className="pt-4 border-t border-slate-100 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-slate-800">
-                  Job Remarks &amp; Signature Lines (Editable per job — clear any field to leave blank)
-                </span>
-                {!isLocked &&
-                  (job.controls.remarks.trim() ||
-                    (job.controls.authorizedSignatory ?? '').trim() ||
-                    (job.controls.counterpartySignatory ?? '').trim()) && (
+          {/* Collapsible 2: Job Remarks & Signature Lines (One-Click Expand/Collapse) */}
+          <div className="rounded-lg border border-slate-200 bg-white overflow-visible">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 hover:bg-slate-50/70 transition-colors rounded-t-lg">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRemarksOpen((v) => !v)}
+                  aria-expanded={remarksOpen}
+                  className="flex items-center gap-2 text-left cursor-pointer"
+                >
+                  {remarksOpen ? (
+                    <ChevronDown className="w-4 h-4 text-slate-500 shrink-0" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
+                  )}
+                  <span className="text-xs font-semibold text-slate-900">
+                    Job Remarks &amp; Signature Lines
+                  </span>
+                </button>
+                <HelpTip text="Editable per job. Enter custom job remarks or specific signer/receiver names, or clear any field to leave it blank on printed documents and Excel exports." />
+              </div>
+              <button
+                type="button"
+                onClick={() => setRemarksOpen((v) => !v)}
+                className="text-xs text-slate-500 cursor-pointer"
+              >
+                {remarksFilledCount === 0 ? 'Blank' : `${remarksFilledCount} / 3 populated`}
+              </button>
+            </div>
+
+            {remarksOpen && (
+              <div className="px-5 pb-5 pt-3 border-t border-slate-100 space-y-3">
+                {!isLocked && remarksFilledCount > 0 && (
+                  <div className="flex justify-end">
                     <button
                       type="button"
                       onClick={() =>
@@ -704,80 +1060,140 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                     >
                       Clear Remarks &amp; Signatures
                     </button>
-                  )}
-              </div>
+                  </div>
+                )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="md:col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Job Remarks / Special Notes (Shown above signatures; leave empty to hide)
-                  </label>
-                  <textarea
-                    rows={2}
-                    disabled={isLocked}
-                    value={job.controls.remarks}
-                    onChange={(e) => onUpdateControls({ remarks: e.target.value })}
-                    placeholder="Optional job-specific remarks, packaging notes, or leave blank..."
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Left Signature Label / Signer Name (Leave empty to hide)
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.authorizedSignatory ?? ''}
-                    onChange={(e) => onUpdateControls({ authorizedSignatory: e.target.value })}
-                    placeholder={`e.g. Authorized Signature — ${company.name} (or leave blank)`}
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Right Signature Label / Receiver Name (Leave empty to hide)
-                  </label>
-                  <input
-                    type="text"
-                    disabled={isLocked}
-                    value={job.controls.counterpartySignatory ?? ''}
-                    onChange={(e) => onUpdateControls({ counterpartySignatory: e.target.value })}
-                    placeholder="e.g. Received in Good Order — Name & Stamp (or leave blank)"
-                    className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                  />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2">
+                    <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600 mb-1.5">
+                      <span>Job Remarks / Special Notes</span>
+                      <HelpTip text="Printed above the signature lines. Leave empty to hide the Remarks line." />
+                    </label>
+                    <textarea
+                      rows={2}
+                      disabled={isLocked}
+                      value={job.controls.remarks}
+                      onChange={(e) => onUpdateControls({ remarks: e.target.value })}
+                      placeholder="Optional remarks or leave blank..."
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                    />
+                  </div>
+                  <div>
+                    <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600 mb-1.5">
+                      <span>Left Signature Label</span>
+                      <HelpTip text="Usually the Grand Group authorized signatory name or title. Leave empty to omit." />
+                    </label>
+                    <input
+                      type="text"
+                      disabled={isLocked}
+                      value={job.controls.authorizedSignatory ?? ''}
+                      onChange={(e) => onUpdateControls({ authorizedSignatory: e.target.value })}
+                      placeholder={`e.g. Authorized Signature — ${company.name}`}
+                      className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                    />
+                  </div>
+                  <div>
+                    <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600 mb-1.5">
+                      <span>Right Signature Label</span>
+                      <HelpTip text="Customer, supplier, or storekeeper receiver signature label. Leave empty to omit." />
+                    </label>
+                    <input
+                      type="text"
+                      disabled={isLocked}
+                      value={job.controls.counterpartySignatory ?? ''}
+                      onChange={(e) => onUpdateControls({ counterpartySignatory: e.target.value })}
+                      placeholder="e.g. Received in Good Order — Name & Stamp"
+                      className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
-          {/* Per-Job Custom Columns Bar (Part No., CAS No., Brand, HS Code — Flexible Placement Across All 6 Docs) */}
-          <div className="rounded-lg border border-slate-200 bg-white px-5 py-3.5 space-y-3">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div>
-                <span className="text-xs font-semibold text-slate-900">
-                  Extra Order Columns (Choose Exact Position · Reflected Across QT, PI, PO, PL, DN, CI &amp; Excel)
-                </span>
-                <p className="text-[11px] text-slate-500">
-                  Add Part No., CAS No., HS Code, or any custom column and place or move it anywhere in the table with zero formula impact.
-                </p>
+          {/* Collapsible 3: Extra Order Columns (Part No., CAS No., etc.) */}
+          <div className="rounded-lg border border-slate-200 bg-white overflow-visible">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 hover:bg-slate-50/70 transition-colors rounded-t-lg">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setExtraColsOpen((v) => !v)}
+                  aria-expanded={extraColsOpen}
+                  className="flex items-center gap-2 text-left cursor-pointer"
+                >
+                  {extraColsOpen ? (
+                    <ChevronDown className="w-4 h-4 text-slate-500 shrink-0" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
+                  )}
+                  <span className="text-xs font-semibold text-slate-900">
+                    Extra Order Columns
+                  </span>
+                </button>
+                <HelpTip text="Add up to 4 order-specific columns (Part No., CAS No., HS Code, Brand) reflected across all 6 documents & Excel exports with zero formula impact. You can also move ANY column left or right directly in the table header below." />
               </div>
-              {customColumns.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2">
-                  {customColumns.map((col) => (
-                    <span
-                      key={col.id}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-slate-50 pl-2.5 pr-1.5 py-1 text-xs font-semibold text-slate-800"
-                    >
-                      <span>{col.label}</span>
+              <button
+                type="button"
+                onClick={() => setExtraColsOpen((v) => !v)}
+                className="text-xs text-slate-500 cursor-pointer"
+              >
+                {customColumns.length === 0
+                  ? 'None added'
+                  : customColumns.map((c) => c.label).join(' · ')}
+              </button>
+            </div>
+
+            {extraColsOpen && (
+              <div className="px-5 pb-4 pt-3 border-t border-slate-100 space-y-3">
+                {customColumns.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {customColumns.map((col) => (
+                      <span
+                        key={col.id}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-slate-50 pl-2.5 pr-1.5 py-1 text-xs font-semibold text-slate-800"
+                      >
+                        <span>{col.label}</span>
+                        <select
+                          disabled={isLocked}
+                          value={col.position || 'after_no'}
+                          onChange={(e) =>
+                            handleMoveCustomColumn(col.id, e.target.value as CustomColumnPosition)
+                          }
+                          aria-label={`Position for ${col.label} column`}
+                          className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-blue-700 focus:border-slate-900 focus:outline-none disabled:opacity-60 cursor-pointer"
+                        >
+                          {CUSTOM_COLUMN_POSITIONS.map((p) => (
+                            <option key={p.value} value={p.value}>
+                              {p.label}
+                            </option>
+                          ))}
+                        </select>
+                        {!isLocked && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveCustomColumn(col.id)}
+                            className="p-0.5 text-slate-400 hover:text-red-600 cursor-pointer"
+                            aria-label={`Remove ${col.label} column`}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {!isLocked && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1">
+                      <span className="text-[11px] font-semibold text-slate-600 whitespace-nowrap">
+                        Place:
+                      </span>
                       <select
-                        disabled={isLocked}
-                        value={col.position || 'after_no'}
-                        onChange={(e) =>
-                          handleMoveCustomColumn(col.id, e.target.value as CustomColumnPosition)
-                        }
-                        aria-label={`Position for ${col.label} column`}
-                        className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-blue-700 focus:border-slate-900 focus:outline-none disabled:opacity-60 cursor-pointer"
+                        value={newColPosition}
+                        onChange={(e) => setNewColPosition(e.target.value as CustomColumnPosition)}
+                        aria-label="Choose where to place new extra column"
+                        className="bg-transparent text-xs font-semibold text-blue-700 focus:outline-none cursor-pointer"
                       >
                         {CUSTOM_COLUMN_POSITIONS.map((p) => (
                           <option key={p.value} value={p.value}>
@@ -785,75 +1201,43 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                           </option>
                         ))}
                       </select>
-                      {!isLocked && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveCustomColumn(col.id)}
-                          className="p-0.5 text-slate-400 hover:text-red-600 cursor-pointer"
-                          aria-label={`Remove ${col.label} column`}
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
+                    </div>
 
-            {!isLocked && (
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <div className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1">
-                  <span className="text-[11px] font-semibold text-slate-600 whitespace-nowrap">
-                    Place:
-                  </span>
-                  <select
-                    value={newColPosition}
-                    onChange={(e) => setNewColPosition(e.target.value as CustomColumnPosition)}
-                    aria-label="Choose where to place new extra column"
-                    className="bg-transparent text-xs font-semibold text-blue-700 focus:outline-none cursor-pointer"
-                  >
-                    {CUSTOM_COLUMN_POSITIONS.map((p) => (
-                      <option key={p.value} value={p.value}>
-                        {p.label}
-                      </option>
+                    {PRESET_CUSTOM_COLUMNS.filter(
+                      (p) => !customColumns.some((c) => c.label.toLowerCase() === p.toLowerCase())
+                    ).map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => handleAddCustomColumn(preset, newColPosition)}
+                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-900 hover:text-slate-900 cursor-pointer"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>{preset}</span>
+                      </button>
                     ))}
-                  </select>
-                </div>
-
-                {PRESET_CUSTOM_COLUMNS.filter(
-                  (p) => !customColumns.some((c) => c.label.toLowerCase() === p.toLowerCase())
-                ).map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => handleAddCustomColumn(preset, newColPosition)}
-                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-900 hover:text-slate-900 cursor-pointer"
-                  >
-                    <Plus className="w-3 h-3" />
-                    <span>{preset}</span>
-                  </button>
-                ))}
-                <div className="inline-flex items-center gap-1.5">
-                  <input
-                    type="text"
-                    value={newColLabel}
-                    onChange={(e) => setNewColLabel(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleAddCustomColumn(newColLabel, newColPosition);
-                    }}
-                    placeholder="Other column (e.g. Model #)..."
-                    className="min-h-[32px] w-44 rounded-md border border-slate-200 px-2.5 py-1 text-xs text-slate-900 focus:border-slate-900 focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => handleAddCustomColumn(newColLabel, newColPosition)}
-                    className="inline-flex items-center gap-1 rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-slate-800 cursor-pointer"
-                  >
-                    <Plus className="w-3 h-3" />
-                    <span>Add</span>
-                  </button>
-                </div>
+                    <div className="inline-flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        value={newColLabel}
+                        onChange={(e) => setNewColLabel(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleAddCustomColumn(newColLabel, newColPosition);
+                        }}
+                        placeholder="Other column..."
+                        className="min-h-[32px] w-40 rounded-md border border-slate-200 px-2.5 py-1 text-xs text-slate-900 focus:border-slate-900 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleAddCustomColumn(newColLabel, newColPosition)}
+                        className="inline-flex items-center gap-1 rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-slate-800 cursor-pointer"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>Add</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -865,7 +1249,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                 <h3 className="text-sm font-semibold text-slate-900">
                   {isLogistics
                     ? `${meta.shortName} Carton & Weight Cards`
-                    : 'Single-Entry Item Cards (Excel Rows 17–36)'}
+                    : 'Single-Entry Item Cards'}
                 </h3>
                 <span className="text-xs font-mono-tabular text-slate-500">
                   {calc.activeRowCount} / 20 Rows
@@ -877,265 +1261,327 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                 computedRows={calc.rows}
                 customColumns={customColumns}
                 currency={curr}
-                themeId={themeId}
+                theme={theme}
                 disabled={isLocked}
                 onUpdateItem={onUpdateItem}
                 onRequestConfirm={onRequestConfirm}
               />
             </div>
           ) : (
-          <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-            <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 border-b border-slate-200 bg-slate-50/70">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-900">
-                  {isLogistics
-                    ? `${meta.shortName} Carton & Weight Entry (Fixed Rows 17–36)`
-                    : isPO
-                    ? 'Supplier PO Line Items (Linked from PI & PRICE CALC)'
-                    : 'Single-Entry Item Schedule (PROFORMA INVOICE Rows 17–36)'}
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {isLogistics
-                    ? 'Verify carton numbers and net/gross weights independently before issuing. Never copy supplier PL blindly.'
-                    : 'Requested Description = end-user wording · Offered Description = supplier wording we sell · Unit Price linked from PRICE CALC.'}
-                </p>
+            <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 border-b border-slate-200 bg-slate-50/70">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-slate-900">
+                    {isLogistics
+                      ? `${meta.shortName} Carton & Weight Schedule`
+                      : isPO
+                      ? 'Supplier PO Line Items'
+                      : 'Single-Entry Item Schedule'}
+                  </h3>
+                  <HelpTip
+                    text={
+                      isLogistics
+                        ? 'Verify carton numbers and net/gross weights independently before issuing. Fixed Excel rows 17–36.'
+                        : 'Single-entry master rows (Excel rows 17–36). Requested = end-user wording; Offered = supplier wording we sell; Unit Price links from PRICE CALC Col R. Use ← / → arrows or drag column headers to reorder any column across all documents.'
+                    }
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  {hasCustomOrder && !isLocked && (
+                    <button
+                      type="button"
+                      onClick={() => onUpdateColumnOrder(undefined)}
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-50 cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>Reset Column Order</span>
+                    </button>
+                  )}
+                  <span className="text-xs text-slate-600 font-mono-tabular">
+                    {calc.activeRowCount} / 20 Rows
+                  </span>
+                </div>
               </div>
-              <span className="text-xs text-slate-600 font-mono-tabular">
-                {calc.activeRowCount} / 20 Rows Active
-              </span>
-            </div>
 
-            <div className="overflow-x-auto sheet-scroll">
-              <table className="w-full border-collapse text-xs">
-                <thead>
-                  <tr style={{ backgroundColor: theme.primary, color: theme.primaryText }}>
-                    <th className="py-2.5 px-2.5 text-center font-semibold w-12">Row</th>
-                    {colsAt('after_no').map((col) => (
-                      <th key={col.id} className="py-2.5 px-2.5 text-left font-semibold min-w-[125px]">
-                        {col.label}
-                      </th>
-                    ))}
-                    <th className="py-2.5 px-3 text-left font-semibold min-w-[220px]">Requested Description</th>
-                    {colsAt('after_requested').map((col) => (
-                      <th key={col.id} className="py-2.5 px-2.5 text-left font-semibold min-w-[125px]">
-                        {col.label}
-                      </th>
-                    ))}
-                    <th className="py-2.5 px-3 text-left font-semibold min-w-[240px]">Offered Description</th>
-                    {colsAt('after_offered').map((col) => (
-                      <th key={col.id} className="py-2.5 px-2.5 text-left font-semibold min-w-[125px]">
-                        {col.label}
-                      </th>
-                    ))}
-                    <th className="py-2.5 px-2 text-center font-semibold w-20">UoM</th>
-                    <th className="py-2.5 px-2 text-right font-semibold w-20">Qty</th>
-                    {colsAt('after_qty').map((col) => (
-                      <th key={col.id} className="py-2.5 px-2.5 text-left font-semibold min-w-[125px]">
-                        {col.label}
-                      </th>
-                    ))}
-                    {isLogistics ? (
-                      <>
-                        <th className="py-2.5 px-2 text-center font-semibold w-28">Carton No.</th>
-                        <th className="py-2.5 px-2 text-right font-semibold w-24">Net Wt (KG)</th>
-                        <th className="py-2.5 px-2 text-right font-semibold w-24">Gross Wt (KG)</th>
-                      </>
-                    ) : isPO ? (
-                      <>
-                        <th className="py-2.5 px-3 text-right font-semibold w-28">Unit Cost</th>
-                        <th className="py-2.5 px-3 text-right font-semibold w-32">Total Cost</th>
-                      </>
-                    ) : (
-                      <>
-                        <th className="py-2.5 px-3 text-right font-semibold w-28">Unit Price (Col R)</th>
-                        <th className="py-2.5 px-3 text-right font-semibold w-32">Total Price</th>
-                      </>
-                    )}
-                    {colsAt('end').map((col) => (
-                      <th key={col.id} className="py-2.5 px-2.5 text-left font-semibold min-w-[125px]">
-                        {col.label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {calc.rows.map((row, idx) => {
-                    const raw = job.items[idx];
-                    const canEditBase = prefix === 'PI' && !isLocked;
-                    const canEditLogistics = isLogistics && !isLocked && !row.isEmpty;
+              <div className="overflow-x-auto sheet-scroll">
+                <table className="w-full border-collapse text-xs">
+                  <thead>
+                    <tr style={{ backgroundColor: theme.primary, color: theme.primaryText }}>
+                      <th className="py-2.5 px-2.5 text-center font-semibold w-12">Row</th>
+                      {orderedColKeys.map((colKey, colIdx) => {
+                        const colMeta = getColumnHeaderMeta(colKey, false);
+                        const alignClass =
+                          colMeta.align === 'center'
+                            ? 'text-center justify-center'
+                            : colMeta.align === 'right'
+                            ? 'text-right justify-end'
+                            : 'text-left justify-start';
 
-                    const renderCustomCells = (pos: CustomColumnPosition) =>
-                      colsAt(pos).map((col) => (
-                        <td key={col.id} className="p-1">
-                          {canEditBase ? (
-                            <input
-                              type="text"
-                              value={raw.customFields?.[col.id] || ''}
-                              placeholder={idx === 0 || !row.isEmpty ? `${col.label}...` : ''}
-                              onChange={(e) =>
-                                onUpdateItem(row.rowNumber, {
-                                  customFields: {
-                                    ...(raw.customFields || {}),
-                                    [col.id]: e.target.value,
-                                  },
-                                })
-                              }
-                              className="w-full min-h-[36px] rounded border border-slate-200/80 hover:border-slate-400 focus:border-slate-900 bg-white/70 focus:bg-white px-2 py-1 font-mono-tabular text-blue-700 focus:outline-none"
-                            />
-                          ) : (
-                            <div className="px-2 py-1.5 font-mono-tabular text-slate-800">
-                              {row.customFields?.[col.id] || ''}
+                        return (
+                          <th
+                            key={colKey}
+                            draggable={!isLocked}
+                            onDragStart={() => setDragColKey(colKey)}
+                            onDragOver={(e) => {
+                              if (!isLocked) e.preventDefault();
+                            }}
+                            onDrop={() => {
+                              if (dragColKey) handleDropColumn(dragColKey, colKey);
+                              setDragColKey(null);
+                            }}
+                            onDragEnd={() => setDragColKey(null)}
+                            className={`py-2 px-2.5 font-semibold select-none ${colMeta.widthClass} ${
+                              !isLocked ? 'cursor-grab active:cursor-grabbing' : ''
+                            } ${dragColKey === colKey ? 'opacity-60' : ''}`}
+                          >
+                            <div className={`flex items-center gap-1.5 ${alignClass}`}>
+                              {!isLocked && colIdx > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleMoveColumnByOffset(colKey, -1)}
+                                  title={`Move ${colMeta.label} left`}
+                                  aria-label={`Move ${colMeta.label} left`}
+                                  className="p-0.5 rounded bg-white/15 hover:bg-white/30 transition-colors cursor-pointer shrink-0"
+                                >
+                                  <ArrowLeft className="w-3 h-3" />
+                                </button>
+                              )}
+                              <span className="truncate">{colMeta.label}</span>
+                              {!isLocked && colIdx < orderedColKeys.length - 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleMoveColumnByOffset(colKey, 1)}
+                                  title={`Move ${colMeta.label} right`}
+                                  aria-label={`Move ${colMeta.label} right`}
+                                  className="p-0.5 rounded bg-white/15 hover:bg-white/30 transition-colors cursor-pointer shrink-0"
+                                >
+                                  <ArrowRight className="w-3 h-3" />
+                                </button>
+                              )}
                             </div>
-                          )}
-                        </td>
-                      ));
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {calc.rows.map((row, idx) => {
+                      const raw = job.items[idx];
+                      const canEditBase = prefix === 'PI' && !isLocked;
+                      const canEditLogistics = isLogistics && !isLocked && !row.isEmpty;
 
-                    return (
-                      <tr
-                        key={row.rowNumber}
-                        className="hover:bg-slate-50/90 transition-colors"
-                        style={idx % 2 === 1 ? { backgroundColor: theme.zebraRow } : undefined}
-                      >
-                        <td className="py-1.5 px-2.5 text-center font-mono-tabular text-slate-400">
-                          {row.rowNumber}
-                        </td>
-                        {renderCustomCells('after_no')}
-                        <td className="p-1">
-                          {canEditBase ? (
-                            <input
-                              type="text"
-                              value={raw.requestedDescription}
-                              placeholder={idx === 0 ? 'End user RFQ wording...' : ''}
-                              onChange={(e) =>
-                                onUpdateItem(row.rowNumber, { requestedDescription: e.target.value })
-                              }
-                              className="w-full min-h-[36px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-2 py-1 text-slate-900 focus:outline-none"
-                            />
-                          ) : (
-                            <div className="px-2 py-1.5 text-slate-800">{row.requestedDescription}</div>
-                          )}
-                        </td>
-                        {renderCustomCells('after_requested')}
-                        <td className="p-1">
-                          {canEditBase ? (
-                            <input
-                              type="text"
-                              value={raw.offeredDescription}
-                              placeholder={idx === 0 ? 'Supplier offered wording...' : ''}
-                              onChange={(e) =>
-                                onUpdateItem(row.rowNumber, { offeredDescription: e.target.value })
-                              }
-                              className="w-full min-h-[36px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-2 py-1 text-slate-900 focus:outline-none"
-                            />
-                          ) : (
-                            <div className="px-2 py-1.5 text-slate-800">{row.offeredDescription}</div>
-                          )}
-                        </td>
-                        {renderCustomCells('after_offered')}
-                        <td className="p-1">
-                          {canEditBase ? (
-                            <select
-                              value={raw.uom}
-                              onChange={(e) => onUpdateItem(row.rowNumber, { uom: e.target.value })}
-                              className="w-full min-h-[36px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-1.5 py-1 text-center font-mono-tabular text-blue-700 focus:outline-none"
-                            >
-                              <option value="">—</option>
-                              {UOM_OPTIONS.map((u) => (
-                                <option key={u} value={u}>{u}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <div className="px-2 py-1.5 text-center font-mono-tabular text-slate-700">{row.uom}</div>
-                          )}
-                        </td>
-                        <td className="p-1">
-                          {canEditBase ? (
-                            <input
-                              type="number"
-                              min="0"
-                              step="any"
-                              value={raw.qty ?? ''}
-                              onChange={(e) =>
-                                onUpdateItem(row.rowNumber, { qty: parseOptionalNumber(e.target.value) })
-                              }
-                              className="w-full min-h-[36px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-2 py-1 text-right font-mono-tabular text-blue-700 font-medium focus:outline-none"
-                            />
-                          ) : (
-                            <div className="px-2 py-1.5 text-right font-mono-tabular text-slate-800">
-                              {row.qty ?? ''}
-                            </div>
-                          )}
-                        </td>
-                        {renderCustomCells('after_qty')}
+                      const renderEditCell = (colKey: string) => {
+                        if (colKey.startsWith('custom:')) {
+                          const cc = customColMap.get(colKey);
+                          if (!cc) return null;
+                          return (
+                            <td key={colKey} className="p-1">
+                              {canEditBase ? (
+                                <input
+                                  type="text"
+                                  value={raw.customFields?.[cc.id] || ''}
+                                  placeholder={idx === 0 || !row.isEmpty ? `${cc.label}...` : ''}
+                                  onChange={(e) =>
+                                    onUpdateItem(row.rowNumber, {
+                                      customFields: {
+                                        ...(raw.customFields || {}),
+                                        [cc.id]: e.target.value,
+                                      },
+                                    })
+                                  }
+                                  className="w-full min-h-[36px] rounded border border-slate-200/80 hover:border-slate-400 focus:border-slate-900 bg-white/70 focus:bg-white px-2 py-1 font-mono-tabular text-blue-700 focus:outline-none"
+                                />
+                              ) : (
+                                <div className="px-2 py-1.5 font-mono-tabular text-slate-800">
+                                  {row.customFields?.[cc.id] || ''}
+                                </div>
+                              )}
+                            </td>
+                          );
+                        }
 
-                        {isLogistics ? (
-                          <>
-                            <td className="p-1">
-                              <input
-                                type="text"
-                                disabled={!canEditLogistics}
-                                value={raw.cartonNo}
-                                placeholder={row.isEmpty ? '' : 'CTN 01-02'}
-                                onChange={(e) =>
-                                  onUpdateItem(row.rowNumber, { cartonNo: e.target.value })
-                                }
-                                className="w-full min-h-[36px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-2 py-1 text-center font-mono-tabular text-blue-700 focus:outline-none disabled:opacity-40"
-                              />
-                            </td>
-                            <td className="p-1">
-                              <input
-                                type="number"
-                                step="0.1"
-                                min="0"
-                                disabled={!canEditLogistics}
-                                value={raw.netWtKg ?? ''}
-                                onChange={(e) =>
-                                  onUpdateItem(row.rowNumber, { netWtKg: parseOptionalNumber(e.target.value) })
-                                }
-                                className="w-full min-h-[36px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-2 py-1 text-right font-mono-tabular text-blue-700 focus:outline-none disabled:opacity-40"
-                              />
-                            </td>
-                            <td className="p-1">
-                              <input
-                                type="number"
-                                step="0.1"
-                                min="0"
-                                disabled={!canEditLogistics}
-                                value={raw.grossWtKg ?? ''}
-                                onChange={(e) =>
-                                  onUpdateItem(row.rowNumber, { grossWtKg: parseOptionalNumber(e.target.value) })
-                                }
-                                className="w-full min-h-[36px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-2 py-1 text-right font-mono-tabular text-blue-700 focus:outline-none disabled:opacity-40"
-                              />
-                            </td>
-                          </>
-                        ) : isPO ? (
-                          <>
-                            <td className="py-1.5 px-3 text-right font-mono-tabular text-slate-700">
-                              {formatMoney(row.supplierUnitCost)}
-                            </td>
-                            <td className="py-1.5 px-3 text-right font-mono-tabular font-medium text-slate-900">
-                              {formatMoney(row.supplierTotalCost)}
-                            </td>
-                          </>
-                        ) : (
-                          <>
-                            <td className="py-1.5 px-3 text-right font-mono-tabular text-slate-700">
-                              {formatMoney(row.activeUnitPrice)}
-                            </td>
-                            <td className="py-1.5 px-3 text-right font-mono-tabular font-medium text-slate-900">
-                              {formatMoney(row.activeTotalPrice)}
-                            </td>
-                          </>
-                        )}
-                        {renderCustomCells('end')}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                        switch (colKey) {
+                          case 'requested':
+                            return (
+                              <td key={colKey} className="p-1">
+                                {canEditBase ? (
+                                  <input
+                                    type="text"
+                                    value={raw.requestedDescription}
+                                    placeholder={idx === 0 ? 'End user RFQ wording...' : ''}
+                                    onChange={(e) =>
+                                      onUpdateItem(row.rowNumber, {
+                                        requestedDescription: e.target.value,
+                                      })
+                                    }
+                                    className="w-full min-h-[36px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-2 py-1 text-slate-900 focus:outline-none"
+                                  />
+                                ) : (
+                                  <div className="px-2 py-1.5 text-slate-800">
+                                    {row.requestedDescription}
+                                  </div>
+                                )}
+                              </td>
+                            );
+                          case 'offered':
+                            return (
+                              <td key={colKey} className="p-1">
+                                {canEditBase ? (
+                                  <input
+                                    type="text"
+                                    value={raw.offeredDescription}
+                                    placeholder={idx === 0 ? 'Supplier offered wording...' : ''}
+                                    onChange={(e) =>
+                                      onUpdateItem(row.rowNumber, {
+                                        offeredDescription: e.target.value,
+                                      })
+                                    }
+                                    className="w-full min-h-[36px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-2 py-1 text-slate-900 focus:outline-none"
+                                  />
+                                ) : (
+                                  <div className="px-2 py-1.5 text-slate-800">
+                                    {row.offeredDescription}
+                                  </div>
+                                )}
+                              </td>
+                            );
+                          case 'uom':
+                            return (
+                              <td key={colKey} className="p-1">
+                                {canEditBase ? (
+                                  <select
+                                    value={raw.uom}
+                                    onChange={(e) =>
+                                      onUpdateItem(row.rowNumber, { uom: e.target.value })
+                                    }
+                                    className="w-full min-h-[36px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-1.5 py-1 text-center font-mono-tabular text-blue-700 focus:outline-none"
+                                  >
+                                    <option value="">—</option>
+                                    {UOM_OPTIONS.map((u) => (
+                                      <option key={u} value={u}>{u}</option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <div className="px-2 py-1.5 text-center font-mono-tabular text-slate-700">
+                                    {row.uom}
+                                  </div>
+                                )}
+                              </td>
+                            );
+                          case 'qty':
+                            return (
+                              <td key={colKey} className="p-1">
+                                {canEditBase ? (
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="any"
+                                    value={raw.qty ?? ''}
+                                    onChange={(e) =>
+                                      onUpdateItem(row.rowNumber, {
+                                        qty: parseOptionalNumber(e.target.value),
+                                      })
+                                    }
+                                    className="w-full min-h-[36px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-2 py-1 text-right font-mono-tabular text-blue-700 font-medium focus:outline-none"
+                                  />
+                                ) : (
+                                  <div className="px-2 py-1.5 text-right font-mono-tabular text-slate-800">
+                                    {row.qty ?? ''}
+                                  </div>
+                                )}
+                              </td>
+                            );
+                          case 'carton':
+                            return (
+                              <td key={colKey} className="p-1">
+                                <input
+                                  type="text"
+                                  disabled={!canEditLogistics}
+                                  value={raw.cartonNo}
+                                  placeholder={row.isEmpty ? '' : 'CTN 01-02'}
+                                  onChange={(e) =>
+                                    onUpdateItem(row.rowNumber, { cartonNo: e.target.value })
+                                  }
+                                  className="w-full min-h-[36px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-2 py-1 text-center font-mono-tabular text-blue-700 focus:outline-none disabled:opacity-40"
+                                />
+                              </td>
+                            );
+                          case 'net_wt':
+                            return (
+                              <td key={colKey} className="p-1">
+                                <input
+                                  type="number"
+                                  step="0.1"
+                                  min="0"
+                                  disabled={!canEditLogistics}
+                                  value={raw.netWtKg ?? ''}
+                                  onChange={(e) =>
+                                    onUpdateItem(row.rowNumber, {
+                                      netWtKg: parseOptionalNumber(e.target.value),
+                                    })
+                                  }
+                                  className="w-full min-h-[36px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-2 py-1 text-right font-mono-tabular text-blue-700 focus:outline-none disabled:opacity-40"
+                                />
+                              </td>
+                            );
+                          case 'gross_wt':
+                            return (
+                              <td key={colKey} className="p-1">
+                                <input
+                                  type="number"
+                                  step="0.1"
+                                  min="0"
+                                  disabled={!canEditLogistics}
+                                  value={raw.grossWtKg ?? ''}
+                                  onChange={(e) =>
+                                    onUpdateItem(row.rowNumber, {
+                                      grossWtKg: parseOptionalNumber(e.target.value),
+                                    })
+                                  }
+                                  className="w-full min-h-[36px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-2 py-1 text-right font-mono-tabular text-blue-700 focus:outline-none disabled:opacity-40"
+                                />
+                              </td>
+                            );
+                          case 'unit_val':
+                            return (
+                              <td
+                                key={colKey}
+                                className="py-1.5 px-3 text-right font-mono-tabular text-slate-700"
+                              >
+                                {formatMoney(isPO ? row.supplierUnitCost : row.activeUnitPrice)}
+                              </td>
+                            );
+                          case 'total_val':
+                            return (
+                              <td
+                                key={colKey}
+                                className="py-1.5 px-3 text-right font-mono-tabular font-medium text-slate-900"
+                              >
+                                {formatMoney(isPO ? row.supplierTotalCost : row.activeTotalPrice)}
+                              </td>
+                            );
+                          default:
+                            return <td key={colKey} />;
+                        }
+                      };
+
+                      return (
+                        <tr
+                          key={row.rowNumber}
+                          className="hover:bg-slate-50/90 transition-colors"
+                          style={idx % 2 === 1 ? { backgroundColor: theme.zebraRow } : undefined}
+                        >
+                          <td className="py-1.5 px-2.5 text-center font-mono-tabular text-slate-400">
+                            {row.rowNumber}
+                          </td>
+                          {orderedColKeys.map(renderEditCell)}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
           )}
         </div>
       )}
@@ -1143,7 +1589,10 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
       {/* ==================== A4 EXECUTIVE PRINT / EXCEL PREVIEW ==================== */}
       {subView === 'preview' && (
         <div className="flex justify-center">
-          <div className="a4-sheet w-full max-w-[960px] rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div
+            className="a4-sheet w-full max-w-[960px] rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden"
+            style={{ fontFamily: theme.fontCss, color: theme.bodyText }}
+          >
             {/* Top Brand & Document Title Banner */}
             <div
               className="px-8 py-5 flex flex-wrap items-center justify-between gap-4"
@@ -1160,7 +1609,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                   </div>
                 )}
                 <div>
-                  <div className="font-display text-2xl font-bold tracking-tight">
+                  <div className="text-2xl font-bold tracking-tight">
                     {company.name}
                   </div>
                   <div className="text-xs opacity-85 mt-0.5">
@@ -1169,12 +1618,14 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                 </div>
               </div>
               <div className="text-right">
-                <div className="font-display text-xl font-bold tracking-wide">
+                <div className="text-xl font-bold tracking-wide">
                   {meta.title}
                 </div>
-                <div className="text-xs font-mono-tabular opacity-90 mt-1">
-                  {displayDocNo}
-                </div>
+                {issuedDocNo && (
+                  <div className="text-xs font-mono-tabular opacity-90 mt-1">
+                    {issuedDocNo}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1200,13 +1651,29 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
                 <div className="space-y-1.5">
                   <div className="font-semibold text-slate-500">{meta.recipientLabel}</div>
-                  <div className="text-sm font-bold text-slate-900">
+                  <div className="text-sm font-bold">
                     {isPO ? job.controls.supplierName || '—' : endUser || '—'}
                   </div>
-                  <div className="text-slate-600">
-                    {isPO ? job.controls.supplierAddress || '—' : job.controls.endUserContact}
-                  </div>
-                  {!isPO && <div className="text-slate-600">{job.controls.endUserAddress}</div>}
+                  {isPO ? (
+                    <div className="opacity-80">{job.controls.supplierAddress || '—'}</div>
+                  ) : (
+                    <>
+                      {job.controls.endUserContact && (
+                        <div className="opacity-85">ATTN: {job.controls.endUserContact}</div>
+                      )}
+                      {(job.controls.endUserSelect !== 'OTHER'
+                        ? (company.endUserAddresses?.[job.controls.endUserSelect] ??
+                            job.controls.endUserAddress)
+                        : job.controls.endUserAddress) && (
+                        <div className="opacity-80">
+                          {job.controls.endUserSelect !== 'OTHER'
+                            ? (company.endUserAddresses?.[job.controls.endUserSelect] ??
+                                job.controls.endUserAddress)
+                            : job.controls.endUserAddress}
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
 
                 <div className="space-y-1.5 md:text-right">
@@ -1247,7 +1714,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                         </span>
                         <span className="text-slate-500 md:text-right md:pr-3">PI Cross-Ref.</span>
                         <span className="font-mono-tabular font-medium text-slate-900">
-                          {job.issuedDocs.PI?.docNumber || 'Pending PI'}
+                          {job.issuedDocs.PI?.docNumber || '—'}
                         </span>
                       </>
                     ) : (
@@ -1264,7 +1731,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                 </div>
               </div>
 
-              {/* Strict Document Table */}
+              {/* Strict Document Table (Follows exact columnOrder across all 6 documents) */}
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse text-xs">
                   <thead>
@@ -1276,130 +1743,141 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                       }}
                     >
                       <th className="py-3 px-2.5 text-center font-semibold w-10">No.</th>
-                      {colsAt('after_no').map((col) => (
-                        <th key={col.id} className="py-3 px-2.5 text-left font-semibold">
-                          {col.label}
-                        </th>
-                      ))}
-                      <th className="py-3 px-3 text-left font-semibold">Requested Description</th>
-                      {colsAt('after_requested').map((col) => (
-                        <th key={col.id} className="py-3 px-2.5 text-left font-semibold">
-                          {col.label}
-                        </th>
-                      ))}
-                      <th className="py-3 px-3 text-left font-semibold">Offered Description</th>
-                      {colsAt('after_offered').map((col) => (
-                        <th key={col.id} className="py-3 px-2.5 text-left font-semibold">
-                          {col.label}
-                        </th>
-                      ))}
-                      <th className="py-3 px-2 text-center font-semibold w-16">UoM</th>
-                      <th className="py-3 px-2 text-right font-semibold w-16">Qty</th>
-                      {colsAt('after_qty').map((col) => (
-                        <th key={col.id} className="py-3 px-2.5 text-left font-semibold">
-                          {col.label}
-                        </th>
-                      ))}
-                      {isLogistics ? (
-                        <>
-                          <th className="py-3 px-2 text-center font-semibold w-24">Carton No.</th>
-                          <th className="py-3 px-2.5 text-right font-semibold w-24">Net Wt (KG)</th>
-                          <th className="py-3 px-2.5 text-right font-semibold w-24">Gross Wt (KG)</th>
-                        </>
-                      ) : isPO ? (
-                        <>
-                          <th className="py-3 px-2.5 text-right font-semibold w-28">Unit Cost ({curr})</th>
-                          <th className="py-3 px-2.5 text-right font-semibold w-32">Total Cost ({curr})</th>
-                        </>
-                      ) : (
-                        <>
-                          <th className="py-3 px-2.5 text-right font-semibold w-28">Unit Price ({curr})</th>
-                          <th className="py-3 px-2.5 text-right font-semibold w-32">Total Price ({curr})</th>
-                        </>
-                      )}
-                      {colsAt('end').map((col) => (
-                        <th key={col.id} className="py-3 px-2.5 text-left font-semibold">
-                          {col.label}
-                        </th>
-                      ))}
+                      {orderedColKeys.map((colKey) => {
+                        const colMeta = getColumnHeaderMeta(colKey, true);
+                        const alignCls =
+                          colMeta.align === 'center'
+                            ? 'text-center'
+                            : colMeta.align === 'right'
+                            ? 'text-right'
+                            : 'text-left';
+                        return (
+                          <th
+                            key={colKey}
+                            className={`py-3 px-2.5 font-semibold ${alignCls} ${colMeta.widthClass}`}
+                          >
+                            {colMeta.label}
+                          </th>
+                        );
+                      })}
                     </tr>
                   </thead>
                   <tbody>
                     {activeRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={(isLogistics ? 8 : 7) + customColumns.length}
+                          colSpan={1 + orderedColKeys.length}
                           className="py-10 text-center text-slate-400 border-b border-slate-200"
                         >
                           No items entered yet. Switch to Job Entry &amp; Controls to populate rows 17–36.
                         </td>
                       </tr>
                     ) : (
-                      activeRows.map((row, idx) => {
-                        const renderPreviewCustom = (pos: CustomColumnPosition) =>
-                          colsAt(pos).map((col) => (
-                            <td
-                              key={col.id}
-                              className="py-2.5 px-2.5 font-mono-tabular text-slate-800 whitespace-nowrap"
-                            >
-                              {row.customFields?.[col.id] || '—'}
-                            </td>
-                          ));
-
-                        return (
-                          <tr
-                            key={row.rowNumber}
-                            style={{
-                              backgroundColor: idx % 2 === 1 ? theme.zebraRow : '#FFFFFF',
-                              borderBottom: `1px solid ${theme.border}`,
-                            }}
-                          >
-                            <td className="py-2.5 px-2.5 text-center font-mono-tabular text-slate-500">
-                              {idx + 1}
-                            </td>
-                            {renderPreviewCustom('after_no')}
-                            <td className="py-2.5 px-3 text-slate-800">{row.requestedDescription}</td>
-                            {renderPreviewCustom('after_requested')}
-                            <td className="py-2.5 px-3 text-slate-900 font-medium">{row.offeredDescription}</td>
-                            {renderPreviewCustom('after_offered')}
-                            <td className="py-2.5 px-2 text-center font-mono-tabular text-slate-700">{row.uom}</td>
-                            <td className="py-2.5 px-2 text-right font-mono-tabular text-slate-900">{row.qty}</td>
-                            {renderPreviewCustom('after_qty')}
-                            {isLogistics ? (
-                              <>
-                                <td className="py-2.5 px-2 text-center font-mono-tabular text-slate-800">
-                                  {row.cartonNo || '—'}
+                      activeRows.map((row, idx) => (
+                        <tr
+                          key={row.rowNumber}
+                          style={{
+                            backgroundColor: idx % 2 === 1 ? theme.zebraRow : '#FFFFFF',
+                            borderBottom: `1px solid ${theme.border}`,
+                          }}
+                        >
+                          <td className="py-2.5 px-2.5 text-center font-mono-tabular text-slate-500">
+                            {idx + 1}
+                          </td>
+                          {orderedColKeys.map((colKey) => {
+                            if (colKey.startsWith('custom:')) {
+                              const cc = customColMap.get(colKey);
+                              return (
+                                <td
+                                  key={colKey}
+                                  className="py-2.5 px-2.5 font-mono-tabular whitespace-nowrap"
+                                >
+                                  {(cc && row.customFields?.[cc.id]) || '—'}
                                 </td>
-                                <td className="py-2.5 px-2.5 text-right font-mono-tabular text-slate-800">
-                                  {formatNumber(row.netWtKg, 2)}
-                                </td>
-                                <td className="py-2.5 px-2.5 text-right font-mono-tabular font-medium text-slate-900">
-                                  {formatNumber(row.grossWtKg, 2)}
-                                </td>
-                              </>
-                            ) : isPO ? (
-                              <>
-                                <td className="py-2.5 px-2.5 text-right font-mono-tabular text-slate-800">
-                                  {formatMoney(row.supplierUnitCost)}
-                                </td>
-                                <td className="py-2.5 px-2.5 text-right font-mono-tabular font-medium text-slate-900">
-                                  {formatMoney(row.supplierTotalCost)}
-                                </td>
-                              </>
-                            ) : (
-                              <>
-                                <td className="py-2.5 px-2.5 text-right font-mono-tabular text-slate-800">
-                                  {formatMoney(row.activeUnitPrice)}
-                                </td>
-                                <td className="py-2.5 px-2.5 text-right font-mono-tabular font-medium text-slate-900">
-                                  {formatMoney(row.activeTotalPrice)}
-                                </td>
-                              </>
-                            )}
-                            {renderPreviewCustom('end')}
-                          </tr>
-                        );
-                      })
+                              );
+                            }
+                            switch (colKey) {
+                              case 'requested':
+                                return (
+                                  <td key={colKey} className="py-2.5 px-3">
+                                    {row.requestedDescription}
+                                  </td>
+                                );
+                              case 'offered':
+                                return (
+                                  <td key={colKey} className="py-2.5 px-3 font-medium">
+                                    {row.offeredDescription}
+                                  </td>
+                                );
+                              case 'uom':
+                                return (
+                                  <td
+                                    key={colKey}
+                                    className="py-2.5 px-2 text-center font-mono-tabular"
+                                  >
+                                    {row.uom}
+                                  </td>
+                                );
+                              case 'qty':
+                                return (
+                                  <td
+                                    key={colKey}
+                                    className="py-2.5 px-2 text-right font-mono-tabular"
+                                  >
+                                    {row.qty}
+                                  </td>
+                                );
+                              case 'carton':
+                                return (
+                                  <td
+                                    key={colKey}
+                                    className="py-2.5 px-2 text-center font-mono-tabular"
+                                  >
+                                    {row.cartonNo || '—'}
+                                  </td>
+                                );
+                              case 'net_wt':
+                                return (
+                                  <td
+                                    key={colKey}
+                                    className="py-2.5 px-2.5 text-right font-mono-tabular"
+                                  >
+                                    {formatNumber(row.netWtKg, 2)}
+                                  </td>
+                                );
+                              case 'gross_wt':
+                                return (
+                                  <td
+                                    key={colKey}
+                                    className="py-2.5 px-2.5 text-right font-mono-tabular font-medium"
+                                  >
+                                    {formatNumber(row.grossWtKg, 2)}
+                                  </td>
+                                );
+                              case 'unit_val':
+                                return (
+                                  <td
+                                    key={colKey}
+                                    className="py-2.5 px-2.5 text-right font-mono-tabular"
+                                  >
+                                    {formatMoney(isPO ? row.supplierUnitCost : row.activeUnitPrice)}
+                                  </td>
+                                );
+                              case 'total_val':
+                                return (
+                                  <td
+                                    key={colKey}
+                                    className="py-2.5 px-2.5 text-right font-mono-tabular font-medium"
+                                  >
+                                    {formatMoney(isPO ? row.supplierTotalCost : row.activeTotalPrice)}
+                                  </td>
+                                );
+                              default:
+                                return <td key={colKey} />;
+                            }
+                          })}
+                        </tr>
+                      ))
                     )}
                   </tbody>
                 </table>
@@ -1413,15 +1891,17 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                     style={{ backgroundColor: theme.totalBg, borderColor: theme.border }}
                   >
                     <div className="flex justify-between">
-                      <span className="font-sans text-slate-600">Total Line Quantity</span>
+                      <span className="text-slate-600">Total Line Quantity</span>
                       <span className="font-semibold text-slate-900">{calc.totalQty}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="font-sans text-slate-600">Total Net Weight</span>
-                      <span className="font-semibold text-slate-900">{formatNumber(calc.plTotalNetWt, 2)} KG</span>
+                      <span className="text-slate-600">Total Net Weight</span>
+                      <span className="font-semibold text-slate-900">
+                        {formatNumber(calc.plTotalNetWt, 2)} KG
+                      </span>
                     </div>
                     <div className="flex justify-between pt-1.5 border-t border-slate-300/60 text-sm font-bold text-slate-900">
-                      <span className="font-sans">Total Gross Weight</span>
+                      <span>Total Gross Weight</span>
                       <span>{formatNumber(calc.plTotalGrossWt, 2)} KG</span>
                     </div>
                   </div>
@@ -1431,21 +1911,25 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                     style={{ backgroundColor: theme.totalBg, borderColor: theme.strongBorder }}
                   >
                     <div className="flex justify-between font-bold text-slate-900">
-                      <span className="font-sans">TOTAL ORDER COST ({curr})</span>
+                      <span>TOTAL ORDER COST ({curr})</span>
                       <span>{formatMoney(calc.totalSupplierCost)}</span>
                     </div>
                   </div>
                 ) : (
                   <div className="w-full sm:w-96 text-xs font-mono-tabular">
                     <div className="flex justify-between py-2 border-b border-slate-200">
-                      <span className="font-sans text-slate-600">GOODS SUBTOTAL</span>
-                      <span className="font-medium text-slate-900">{formatMoney(calc.goodsSubtotal, curr)}</span>
+                      <span className="text-slate-600">GOODS SUBTOTAL</span>
+                      <span className="font-medium text-slate-900">
+                        {formatMoney(calc.goodsSubtotal, curr)}
+                      </span>
                     </div>
                     <div className="flex justify-between py-2 border-b border-slate-200">
-                      <span className="font-sans text-slate-600">
+                      <span className="text-slate-600">
                         FREIGHT &amp; DOCUMENTATION ({job.controls.incoterm})
                       </span>
-                      <span className="font-medium text-slate-900">{formatMoney(calc.customerFreight, curr)}</span>
+                      <span className="font-medium text-slate-900">
+                        {formatMoney(calc.customerFreight, curr)}
+                      </span>
                     </div>
                     <div
                       className="flex justify-between py-3 px-3 mt-1 rounded-sm text-sm font-bold border-t border-b-2"
@@ -1455,7 +1939,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                         color: theme.primary,
                       }}
                     >
-                      <span className="font-sans">GRAND TOTAL ({curr})</span>
+                      <span>GRAND TOTAL ({curr})</span>
                       <span>{formatMoney(calc.grandTotal)}</span>
                     </div>
                   </div>

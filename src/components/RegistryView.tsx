@@ -1,27 +1,37 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Ban, FileSpreadsheet, Search, Upload } from 'lucide-react';
-import { DOC_META, EXCEL_THEMES } from '../constants/themes';
-import { CompanyProfile, DocPrefix, RegistryEntry, ThemeVariantId } from '../types/procurement';
+import { Ban, FileSpreadsheet, RotateCcw, Search, Upload } from 'lucide-react';
+import { DOC_META } from '../constants/themes';
+import {
+  CompanyProfile,
+  ConfirmDialogRequest,
+  DocPrefix,
+  RegistryEntry,
+  ThemePalette,
+} from '../types/procurement';
 import { formatMoney } from '../utils/calculations';
 import { exportMasterRegistryXlsx, importWorkbookFromXlsx } from '../utils/excelEngine';
 
 interface RegistryViewProps {
   entries: RegistryEntry[];
   nextSeq: number;
-  themeId: ThemeVariantId;
+  theme: ThemePalette;
   company: CompanyProfile;
   onVoidEntry: (sequence: number, reason: string) => void;
   onSyncRegistryEntries: (entries: RegistryEntry[]) => void;
+  onResetRegistry: () => void;
+  onRequestConfirm: (req: ConfirmDialogRequest) => void;
   onNotify: (msg: string) => void;
 }
 
 export const RegistryView: React.FC<RegistryViewProps> = ({
   entries,
   nextSeq,
-  themeId,
+  theme,
   company,
   onVoidEntry,
   onSyncRegistryEntries,
+  onResetRegistry,
+  onRequestConfirm,
   onNotify,
 }) => {
   const [search, setSearch] = useState('');
@@ -31,8 +41,6 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
   const [voidReason, setVoidReason] = useState('');
   const [exporting, setExporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  const theme = EXCEL_THEMES[themeId];
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -56,7 +64,7 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
   const handleExportRegistry = async () => {
     setExporting(true);
     try {
-      const filename = await exportMasterRegistryXlsx(entries, themeId, company);
+      const filename = await exportMasterRegistryXlsx(entries, theme, company);
       onNotify(`Exported ${filename} (${entries.length} records)`);
     } catch {
       onNotify('Failed to export Master_Registry.xlsx. Please try again.');
@@ -74,7 +82,7 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
         onSyncRegistryEntries(result.entries);
         onNotify(`Synced ${result.importedCount} entries from ${file.name}`);
       } else {
-        onNotify('Selected file is a Job workbook, not Master_Registry.xlsx. Use Excel Studio to open Job files.');
+        onNotify('Selected file is a Job workbook, not Master_Registry.xlsx. Use Import & Export to open Job files.');
       }
     } catch {
       onNotify('Could not read Master_Registry.xlsx. Check file format.');
@@ -106,7 +114,9 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
         <div className="rounded-lg border border-slate-200 bg-white p-4">
           <div className="text-xs text-slate-500">Total Claimed</div>
           <div className="mt-1.5 text-2xl font-bold font-mono-tabular text-slate-900">{entries.length}</div>
-          <div className="mt-1 text-xs text-slate-500">Seeded from PI-GG-042-2026</div>
+          <div className="mt-1 text-xs text-slate-500">
+            {entries.length === 0 ? 'Starting fresh from #001' : 'Shared across all document types'}
+          </div>
         </div>
         <div className="rounded-lg border border-slate-200 bg-white p-4">
           <div className="text-xs text-slate-500">Active Issued</div>
@@ -179,6 +189,24 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
           />
           <button
             type="button"
+            disabled={entries.length === 0}
+            onClick={() =>
+              onRequestConfirm({
+                title: 'Reset Master Registry to 0?',
+                message:
+                  'This clears all registry entries and resets the next document number back to #001. Issued numbers on existing jobs will also be unlocked so you can start from the beginning.',
+                confirmLabel: 'Reset to 0',
+                destructive: true,
+                onConfirm: onResetRegistry,
+              })
+            }
+            className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 cursor-pointer min-h-[40px] whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>Reset to 0</span>
+          </button>
+          <button
+            type="button"
             onClick={() => fileInputRef.current?.click()}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer min-h-[40px] whitespace-nowrap"
           >
@@ -219,7 +247,9 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
               {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="py-10 text-center text-slate-500">
-                    No registry records match your current filter.
+                    {entries.length === 0
+                      ? 'Registry is at 0. Issue your first document to claim #001.'
+                      : 'No registry records match your current filter.'}
                   </td>
                 </tr>
               ) : (
@@ -261,7 +291,7 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
                       )}
                     </td>
                     <td className="py-3 px-3 text-right">
-                      {entry.status === 'ISSUED' && entry.sequence > 42 ? (
+                      {entry.status === 'ISSUED' ? (
                         <button
                           type="button"
                           onClick={() => setVoidingSeq(entry.sequence)}

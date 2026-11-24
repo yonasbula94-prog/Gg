@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeftRight,
   Calculator,
   FileSpreadsheet,
   FileText,
@@ -8,19 +9,20 @@ import {
   Menu,
   Monitor,
   Package,
-  Palette,
   Plus,
   Receipt,
+  Settings,
   ShoppingCart,
   Tablet,
   Trash2,
   Truck,
   X,
 } from 'lucide-react';
-import { DOC_META, EXCEL_THEMES } from './constants/themes';
+import { DOC_META, resolveThemePalette } from './constants/themes';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { DocumentWorkspaceView } from './components/DocumentWorkspaceView';
 import { ExcelStudioView } from './components/ExcelStudioView';
+import { FilesHubView } from './components/FilesHubView';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButton';
 import { PriceCalcView } from './components/PriceCalcView';
 import { RegistryView } from './components/RegistryView';
@@ -34,15 +36,18 @@ import {
   loadCompanyProfile,
   loadJobsWithHealth,
   loadRegistryWithHealth,
+  loadThemeCustomization,
   loadThemeVariant,
   normalizeCompanyProfile,
   normalizeJob,
   normalizeRegistryEntries,
+  normalizeThemeCustomization,
   safeDeepClone,
   saveActiveJobId,
   saveCompanyProfile,
   saveJobs,
   saveRegistry,
+  saveThemeCustomization,
   saveThemeVariant,
 } from './store/storage';
 import {
@@ -56,6 +61,7 @@ import {
   PlatformMode,
   ProcurementJob,
   RegistryEntry,
+  ThemeCustomization,
   ThemeVariantId,
   WorkspaceTab,
 } from './types/procurement';
@@ -73,7 +79,8 @@ const TAB_LABELS: Record<WorkspaceTab, string> = {
   DN: 'Delivery Note (DN)',
   CI: 'Commercial Invoice (CI)',
   REGISTRY: 'Master Registry',
-  STUDIO: 'Excel Studio & Import',
+  FILES: 'Import & Export',
+  STUDIO: 'Clients & Settings',
 };
 
 export default function App() {
@@ -94,6 +101,9 @@ export default function App() {
   const [activeJobId, setActiveJobId] = useState<string>(startup.activeId);
   const [registry, setRegistry] = useState<RegistryEntry[]>(startup.registry);
   const [themeId, setThemeId] = useState<ThemeVariantId>(() => loadThemeVariant());
+  const [themeCustomization, setThemeCustomization] = useState<ThemeCustomization>(() =>
+    loadThemeCustomization()
+  );
   const [company, setCompany] = useState<CompanyProfile>(() => loadCompanyProfile());
   const [platformMode, setPlatformMode] = useState<PlatformMode>(() => detectDefaultPlatform());
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('PI');
@@ -114,7 +124,10 @@ export default function App() {
 
   const calc = useMemo(() => calculateJob(activeJob), [activeJob]);
   const nextSeq = useMemo(() => getNextSequenceNumber(registry), [registry]);
-  const theme = EXCEL_THEMES[themeId];
+  const theme = useMemo(
+    () => resolveThemePalette(themeId, themeCustomization),
+    [themeId, themeCustomization]
+  );
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -122,7 +135,7 @@ export default function App() {
 
   useEffect(() => {
     if (!saveJobs(jobs)) {
-      setToast('Local storage is nearly full. Export a JSON Backup in Excel Studio to safeguard your jobs.');
+      setToast('Local storage is nearly full. Export a JSON Backup in Import & Export to safeguard your jobs.');
     }
   }, [jobs]);
 
@@ -133,6 +146,9 @@ export default function App() {
   }, [registry]);
 
   useEffect(() => saveThemeVariant(themeId), [themeId]);
+  useEffect(() => {
+    saveThemeCustomization(themeCustomization);
+  }, [themeCustomization]);
 
   useEffect(() => {
     if (!saveCompanyProfile(company)) {
@@ -179,10 +195,21 @@ export default function App() {
     }));
   };
 
-  const handleUpdateCustomColumns = (cols: CustomColumnDef[]) => {
+  const handleUpdateCustomColumns = (
+    cols: CustomColumnDef[],
+    nextColumnOrder?: string[]
+  ) => {
     mutateActiveJob((j) => ({
       ...j,
       customColumns: cols,
+      columnOrder: nextColumnOrder !== undefined ? nextColumnOrder : j.columnOrder,
+    }));
+  };
+
+  const handleUpdateColumnOrder = (order: string[] | undefined) => {
+    mutateActiveJob((j) => ({
+      ...j,
+      columnOrder: order,
     }));
   };
 
@@ -197,7 +224,7 @@ export default function App() {
 
   const handleCreateNewJob = () => {
     const num = jobs.length + 1;
-    const fresh = createBlankJob(`Procurement Job #${num}`);
+    const fresh = createBlankJob(`Procurement Job #${num}`, company);
     setJobs((prev) => [fresh, ...prev]);
     setActiveJobId(fresh.id);
     setActiveTab('PI');
@@ -233,7 +260,7 @@ export default function App() {
         setJobs((prev) => {
           const remaining = prev.filter((j) => j.id !== target.id);
           if (remaining.length === 0) {
-            const fresh = createBlankJob('Procurement Job #1');
+            const fresh = createBlankJob('Procurement Job #1', company);
             setActiveJobId(fresh.id);
             return [fresh];
           }
@@ -403,7 +430,10 @@ export default function App() {
 
     if (options.target === 'new_job') {
       const fresh = buildUpdatedJob(
-        createBlankJob(quote.supplierName ? `${quote.supplierName} Quote` : 'Supplier Quote Job')
+        createBlankJob(
+          quote.supplierName ? `${quote.supplierName} Quote` : 'Supplier Quote Job',
+          company
+        )
       );
       setJobs((prev) => [fresh, ...prev]);
       setActiveJobId(fresh.id);
@@ -449,18 +479,72 @@ export default function App() {
   };
 
   const handleUpdateCompany = (patch: Partial<CompanyProfile>) => {
-    setCompany((prev) => ({ ...prev, ...patch }));
+    setCompany((prev) => {
+      const next = { ...prev, ...patch };
+      saveCompanyProfile(next);
+      return next;
+    });
+    if (patch.endUserAddresses) {
+      const updatedAddresses = patch.endUserAddresses;
+      setJobs((prevJobs) =>
+        prevJobs.map((job) => {
+          const sel = job.controls.endUserSelect;
+          const isAnyIssued = Object.values(job.issuedDocs).some((d) => d && !d.isVoided);
+          if (!isAnyIssued && sel && sel !== 'OTHER' && sel in updatedAddresses) {
+            const nextAddr = updatedAddresses[sel] || '';
+            if (job.controls.endUserAddress !== nextAddr) {
+              return {
+                ...job,
+                updatedAt: new Date().toISOString(),
+                controls: { ...job.controls, endUserAddress: nextAddr },
+              };
+            }
+          }
+          return job;
+        })
+      );
+    }
+  };
+
+  const handleResetRegistry = () => {
+    setRegistry([]);
+    saveRegistry([]);
+    setJobs((prevJobs) =>
+      prevJobs.map((job) => ({
+        ...job,
+        updatedAt: new Date().toISOString(),
+        issuedDocs: {},
+      }))
+    );
+    showToast('Master Registry reset to 0. Next document will start at #001.');
   };
 
   const handleResetCompany = () => {
-    setCompany(createDefaultCompanyProfile());
+    const defaults = createDefaultCompanyProfile();
+    saveCompanyProfile(defaults);
+    setCompany(defaults);
     showToast('Reset company branding, logo, and End-User list to defaults.');
+  };
+
+  const handleUpdateThemeCustomization = (patch: Partial<ThemeCustomization>) => {
+    setThemeCustomization((prev) => {
+      const next = normalizeThemeCustomization({ ...prev, ...patch });
+      saveThemeCustomization(next);
+      return next;
+    });
+  };
+
+  const handleResetThemeCustomization = () => {
+    saveThemeCustomization({});
+    setThemeCustomization({});
   };
 
   const handleRestoreBackup = (
     restoredJobs: ProcurementJob[],
     restoredRegistry: RegistryEntry[],
-    restoredCompany?: CompanyProfile
+    restoredCompany?: CompanyProfile,
+    restoredThemeId?: ThemeVariantId,
+    restoredThemeCustom?: ThemeCustomization
   ) => {
     if (restoredJobs.length > 0) {
       const normalized = restoredJobs.map((j) => normalizeJob(j));
@@ -472,7 +556,17 @@ export default function App() {
       setRegistry(cleanReg);
     }
     if (restoredCompany) {
-      setCompany(normalizeCompanyProfile(restoredCompany));
+      const normCompany = normalizeCompanyProfile(restoredCompany);
+      saveCompanyProfile(normCompany);
+      setCompany(normCompany);
+    }
+    if (restoredThemeId) {
+      setThemeId(restoredThemeId);
+    }
+    if (restoredThemeCustom) {
+      const normCustom = normalizeThemeCustomization(restoredThemeCustom);
+      saveThemeCustomization(normCustom);
+      setThemeCustomization(normCustom);
     }
   };
 
@@ -498,10 +592,11 @@ export default function App() {
       ],
     },
     {
-      group: 'Registry & Excel',
+      group: 'Files & Settings',
       items: [
         { id: 'REGISTRY', label: 'Master Registry', icon: <Hash className="w-4 h-4" /> },
-        { id: 'STUDIO', label: 'Excel Studio & Import', icon: <Palette className="w-4 h-4" /> },
+        { id: 'FILES', label: 'Import & Export', icon: <ArrowLeftRight className="w-4 h-4" /> },
+        { id: 'STUDIO', label: 'Clients & Settings', icon: <Settings className="w-4 h-4" /> },
       ],
     },
   ];
@@ -720,7 +815,7 @@ export default function App() {
             </span>
           </div>
 
-          {/* Platform Version Switcher (Windows vs iPad) + 3-Variant Excel Style Switcher */}
+          {/* Platform Version Switcher (Windows vs iPad) */}
           <div className="flex flex-wrap items-center gap-3">
             <div className="inline-flex items-center p-0.5 rounded-lg bg-slate-200/80">
               <button
@@ -747,32 +842,6 @@ export default function App() {
                 <Tablet className="w-3.5 h-3.5" />
                 <span>iPad / iOS</span>
               </button>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-500 hidden sm:inline whitespace-nowrap">
-                Style:
-              </span>
-              <div className="inline-flex items-center p-0.5 rounded-lg bg-slate-200/80">
-                {(['v1', 'v2', 'v3'] as ThemeVariantId[]).map((id) => {
-                  const t = EXCEL_THEMES[id];
-                  const isSelected = themeId === id;
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => setThemeId(id)}
-                      className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer whitespace-nowrap min-h-[30px] ${
-                        isSelected
-                          ? 'bg-white text-slate-900 shadow-sm'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      {t.shortLabel}
-                    </button>
-                  );
-                })}
-              </div>
             </div>
           </div>
         </div>
@@ -813,16 +882,17 @@ export default function App() {
               job={activeJob}
               prefix={activeTab}
               calc={calc}
-              themeId={themeId}
+              theme={theme}
               company={company}
               platformMode={platformMode}
-              nextSeq={nextSeq}
               onUpdateJobName={handleUpdateJobName}
               onUpdateControls={handleUpdateControls}
               onUpdateCustomColumns={handleUpdateCustomColumns}
+              onUpdateColumnOrder={handleUpdateColumnOrder}
               onUpdateItem={handleUpdateItem}
               onIssueDocument={handleIssueDocument}
               onDuplicateAsNewJob={handleDuplicateAsNewJob}
+              onNavigateTab={setActiveTab}
               onRequestConfirm={setConfirmDialog}
               onNotify={showToast}
             />
@@ -832,7 +902,7 @@ export default function App() {
             <PriceCalcView
               job={activeJob}
               calc={calc}
-              themeId={themeId}
+              theme={theme}
               platformMode={platformMode}
               onUpdateItem={handleUpdateItem}
               onUpdateFreight={handleUpdateFreight}
@@ -845,28 +915,45 @@ export default function App() {
             <RegistryView
               entries={registry}
               nextSeq={nextSeq}
-              themeId={themeId}
+              theme={theme}
               company={company}
               onVoidEntry={handleVoidRegistryEntry}
               onSyncRegistryEntries={handleSyncRegistry}
+              onResetRegistry={handleResetRegistry}
+              onRequestConfirm={setConfirmDialog}
+              onNotify={showToast}
+            />
+          )}
+
+          {activeTab === 'FILES' && (
+            <FilesHubView
+              activeJob={activeJob}
+              allJobs={jobs}
+              registry={registry}
+              themeId={themeId}
+              theme={theme}
+              themeCustomization={themeCustomization}
+              company={company}
+              onImportJob={handleImportJob}
+              onOpenSupplierQuote={setPendingSupplierQuote}
+              onSyncRegistry={handleSyncRegistry}
+              onRestoreBackup={handleRestoreBackup}
+              onRequestConfirm={setConfirmDialog}
               onNotify={showToast}
             />
           )}
 
           {activeTab === 'STUDIO' && (
             <ExcelStudioView
-              activeJob={activeJob}
-              allJobs={jobs}
-              registry={registry}
               themeId={themeId}
+              theme={theme}
+              themeCustomization={themeCustomization}
               company={company}
               onSelectTheme={setThemeId}
+              onUpdateThemeCustomization={handleUpdateThemeCustomization}
+              onResetThemeCustomization={handleResetThemeCustomization}
               onUpdateCompany={handleUpdateCompany}
               onResetCompany={handleResetCompany}
-              onImportJob={handleImportJob}
-              onOpenSupplierQuote={setPendingSupplierQuote}
-              onSyncRegistry={handleSyncRegistry}
-              onRestoreBackup={handleRestoreBackup}
               onRequestConfirm={setConfirmDialog}
               onNotify={showToast}
             />
@@ -877,7 +964,7 @@ export default function App() {
       {/* Reusable In-App Confirmation Dialog for Destructive Actions */}
       <ConfirmDialog
         request={confirmDialog}
-        themeId={themeId}
+        theme={theme}
         onClose={() => setConfirmDialog(null)}
       />
 
@@ -886,7 +973,7 @@ export default function App() {
         <SupplierQuoteImportModal
           initialQuote={pendingSupplierQuote}
           activeJobName={activeJob.jobName}
-          themeId={themeId}
+          theme={theme}
           onApply={handleApplySupplierQuote}
           onClose={() => setPendingSupplierQuote(null)}
         />
@@ -903,8 +990,8 @@ export default function App() {
               { id: 'PI' as WorkspaceTab, label: 'Entry / PI', icon: <FileText className="w-5 h-5" />, active: activeTab === 'PI' },
               { id: 'PRICE_CALC' as WorkspaceTab, label: 'Price Calc', icon: <Calculator className="w-5 h-5" />, active: activeTab === 'PRICE_CALC' },
               { id: 'QT' as WorkspaceTab, label: 'Docs', icon: <Receipt className="w-5 h-5" />, active: ['QT', 'PO', 'PL', 'DN', 'CI'].includes(activeTab) },
-              { id: 'REGISTRY' as WorkspaceTab, label: 'Registry', icon: <Hash className="w-5 h-5" />, active: activeTab === 'REGISTRY' },
-              { id: 'STUDIO' as WorkspaceTab, label: 'Studio', icon: <Palette className="w-5 h-5" />, active: activeTab === 'STUDIO' },
+              { id: 'FILES' as WorkspaceTab, label: 'Files', icon: <ArrowLeftRight className="w-5 h-5" />, active: activeTab === 'FILES' },
+              { id: 'STUDIO' as WorkspaceTab, label: 'Settings', icon: <Settings className="w-5 h-5" />, active: activeTab === 'STUDIO' },
             ].map((item) => (
               <button
                 key={item.id}

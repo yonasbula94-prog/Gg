@@ -1,24 +1,79 @@
 import defaultLogoUrl from '../assets/grand-group-logo.png?inline';
-import { COMPANY_INFO, END_USER_OPTIONS } from '../constants/themes';
+import {
+  COMPANY_INFO,
+  DEFAULT_END_USER_ADDRESSES,
+  DOCUMENT_FONT_OPTIONS,
+  END_USER_OPTIONS,
+} from '../constants/themes';
 import {
   CompanyProfile,
   CustomColumnDef,
   CustomColumnPosition,
   DocPrefix,
+  DocumentFontId,
   IssuedDocRecord,
   JobItemRow,
   ProcurementJob,
   RegistryEntry,
+  ThemeCustomization,
   ThemeVariantId,
 } from '../types/procurement';
 
 export const STORAGE_KEYS = {
   JOBS: 'gg_fzc_procurement_jobs_v1',
-  REGISTRY: 'gg_fzc_master_registry_v1',
+  REGISTRY: 'gg_fzc_master_registry_v2',
   THEME: 'gg_fzc_excel_theme_v1',
+  THEME_CUSTOM: 'gg_fzc_theme_custom_v1',
   ACTIVE_JOB: 'gg_fzc_active_job_id_v1',
   COMPANY: 'gg_fzc_company_profile_v1',
+  ADMIN_PASS: 'gg_fzc_admin_pass_v1',
 };
+
+export const DEFAULT_ADMIN_PASSWORD = 'GGAdmin2026';
+
+// Deterministic offline-safe hash (works synchronously even under file:// where crypto.subtle may be blocked)
+function hashAdminSecret(raw: string): string {
+  const salted = `GGFZC::ADMIN::2026::${raw}`;
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < salted.length; i++) {
+    const ch = salted.charCodeAt(i);
+    h1 ^= ch;
+    h1 = Math.imul(h1, 0x01000193);
+    h2 ^= ch + ((i + 1) * 31);
+    h2 = Math.imul(h2, 0x85ebca6b);
+  }
+  return `v1_${(h1 >>> 0).toString(16).padStart(8, '0')}_${(h2 >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+export function hasCustomAdminPassword(): boolean {
+  try {
+    return Boolean(localStorage.getItem(STORAGE_KEYS.ADMIN_PASS));
+  } catch {
+    return false;
+  }
+}
+
+export function verifyAdminPassword(candidate: string): boolean {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEYS.ADMIN_PASS);
+    const expected = stored || hashAdminSecret(DEFAULT_ADMIN_PASSWORD);
+    return hashAdminSecret(candidate) === expected;
+  } catch {
+    return candidate === DEFAULT_ADMIN_PASSWORD;
+  }
+}
+
+export function setAdminPassword(newPassword: string): boolean {
+  const trimmed = newPassword.trim();
+  if (trimmed.length < 4) return false;
+  try {
+    localStorage.setItem(STORAGE_KEYS.ADMIN_PASS, hashAdminSecret(trimmed));
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const VALID_PREFIXES: DocPrefix[] = ['QT', 'PI', 'PO', 'PL', 'DN', 'CI'];
 const VALID_COL_POSITIONS: CustomColumnPosition[] = [
@@ -64,6 +119,7 @@ export function createDefaultCompanyProfile(): CompanyProfile {
     ...COMPANY_INFO,
     logoDataUrl: defaultLogoUrl,
     endUsers: [...END_USER_OPTIONS],
+    endUserAddresses: { ...DEFAULT_END_USER_ADDRESSES },
   };
 }
 
@@ -82,13 +138,41 @@ export function normalizeCompanyProfile(raw: unknown): CompanyProfile {
     uniqueEndUsers.push('OTHER');
   }
 
+  // Migrate untouched legacy default strings to updated SAIF Zone & sales@grandgroupfzc.com defaults
+  // while strictly preserving any customized admin edits across startup/reloads.
+  const rawAddr1 = safeStr(parsed.addressLine1, defaults.addressLine1);
+  const rawAddr2 = safeStr(parsed.addressLine2, defaults.addressLine2);
+  const rawEmail = safeStr(parsed.email, defaults.email);
+
+  const migratedAddr1 =
+    rawAddr1.trim() === 'P.O. Box 42188, Hamriyah Free Zone'
+      ? defaults.addressLine1
+      : rawAddr1;
+  const migratedAddr2 =
+    rawAddr2.trim() === 'Sharjah, United Arab Emirates'
+      ? defaults.addressLine2
+      : rawAddr2;
+  const migratedEmail =
+    rawEmail.trim().toLowerCase() === 'procurement@grandgroupfzc.com'
+      ? defaults.email
+      : rawEmail;
+
+  const mergedAddresses: Record<string, string> = { ...defaults.endUserAddresses };
+  if (parsed.endUserAddresses && typeof parsed.endUserAddresses === 'object') {
+    for (const [k, v] of Object.entries(parsed.endUserAddresses)) {
+      if (typeof k === 'string' && k.trim() && typeof v === 'string') {
+        mergedAddresses[k.trim()] = v;
+      }
+    }
+  }
+
   return {
     name: safeStr(parsed.name, defaults.name) || defaults.name,
     tagline: safeStr(parsed.tagline, defaults.tagline),
-    addressLine1: safeStr(parsed.addressLine1, defaults.addressLine1),
-    addressLine2: safeStr(parsed.addressLine2, defaults.addressLine2),
+    addressLine1: migratedAddr1,
+    addressLine2: migratedAddr2,
     phone: safeStr(parsed.phone, defaults.phone),
-    email: safeStr(parsed.email, defaults.email),
+    email: migratedEmail,
     trn: safeStr(parsed.trn, defaults.trn),
     bankDetails: safeStr(parsed.bankDetails, defaults.bankDetails),
     logoDataUrl:
@@ -96,6 +180,7 @@ export function normalizeCompanyProfile(raw: unknown): CompanyProfile {
         ? parsed.logoDataUrl
         : defaults.logoDataUrl,
     endUsers: uniqueEndUsers.length > 0 ? uniqueEndUsers : defaults.endUsers,
+    endUserAddresses: mergedAddresses,
   };
 }
 
@@ -112,6 +197,55 @@ export function loadCompanyProfile(): CompanyProfile {
 export function saveCompanyProfile(profile: CompanyProfile): boolean {
   try {
     localStorage.setItem(STORAGE_KEYS.COMPANY, JSON.stringify(profile));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function normalizeThemeCustomization(raw: unknown): ThemeCustomization {
+  if (!raw || typeof raw !== 'object') return {};
+  const src = raw as Partial<ThemeCustomization>;
+  const validHex = (val: unknown): string | undefined =>
+    typeof val === 'string' && /^#[0-9A-Fa-f]{6}$/.test(val.trim())
+      ? val.trim().toUpperCase()
+      : undefined;
+  const validFontIds = new Set<DocumentFontId>(DOCUMENT_FONT_OPTIONS.map((f) => f.id));
+  const fontFamily =
+    typeof src.fontFamily === 'string' && validFontIds.has(src.fontFamily as DocumentFontId)
+      ? (src.fontFamily as DocumentFontId)
+      : undefined;
+
+  const out: ThemeCustomization = {};
+  const p = validHex(src.primary);
+  const a = validHex(src.accent);
+  const t = validHex(src.totalBg);
+  const s = validHex(src.secondaryBg);
+  const ht = validHex(src.headerText);
+  const bt = validHex(src.bodyText);
+  if (p) out.primary = p;
+  if (a) out.accent = a;
+  if (t) out.totalBg = t;
+  if (s) out.secondaryBg = s;
+  if (ht) out.headerText = ht;
+  if (bt) out.bodyText = bt;
+  if (fontFamily) out.fontFamily = fontFamily;
+  return out;
+}
+
+export function loadThemeCustomization(): ThemeCustomization {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.THEME_CUSTOM);
+    if (!raw) return {};
+    return normalizeThemeCustomization(JSON.parse(raw));
+  } catch {
+    return {};
+  }
+}
+
+export function saveThemeCustomization(custom: ThemeCustomization): boolean {
+  try {
+    localStorage.setItem(STORAGE_KEYS.THEME_CUSTOM, JSON.stringify(custom));
     return true;
   } catch {
     return false;
@@ -138,9 +272,16 @@ export function createEmptyItems(): JobItemRow[] {
   }));
 }
 
-export function createBlankJob(name?: string): ProcurementJob {
+export function createBlankJob(name?: string, company?: CompanyProfile): ProcurementJob {
   const now = new Date().toISOString();
   const id = `job-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const defaultEndUser = company?.endUsers?.[0] || 'AIAA (Asmara International Airport)';
+  const defaultAddress =
+    defaultEndUser === 'OTHER'
+      ? ''
+      : company?.endUserAddresses?.[defaultEndUser] ??
+        DEFAULT_END_USER_ADDRESSES[defaultEndUser] ??
+        '';
   return {
     id,
     jobName: name || 'Procurement Job #1',
@@ -148,10 +289,10 @@ export function createBlankJob(name?: string): ProcurementJob {
     updatedAt: now,
     preparedBy: 'Procurement Desk',
     controls: {
-      endUserSelect: 'AIAA (Asmara International Airport)',
+      endUserSelect: defaultEndUser,
       customEndUser: '',
-      endUserContact: 'Procurement Department',
-      endUserAddress: 'Asmara, Eritrea',
+      endUserContact: '',
+      endUserAddress: defaultAddress,
       currency: 'USD',
       incoterm: 'CIF',
       destination: 'Massawa Seaport',
@@ -185,24 +326,9 @@ export function createBlankJob(name?: string): ProcurementJob {
   };
 }
 
-// Seeded with PI-GG-042-2026 so the next claimed document number is strictly 43
+// Clean empty registry starting at sequence 0 (next claimed document number is #001)
 export function createSeededRegistry(): RegistryEntry[] {
-  return [
-    {
-      sequence: 42,
-      docNumber: 'PI-GG-042-2026',
-      prefix: 'PI',
-      year: 2026,
-      jobId: 'legacy-seed-042',
-      jobName: 'Massawa Port Hydraulics Maintenance Kit',
-      customer: 'Massawa Port',
-      currency: 'USD',
-      amount: 14820.0,
-      issuedBy: 'Admin Seed',
-      issuedAt: '2026-11-18T09:15:00.000Z',
-      status: 'ISSUED',
-    },
-  ];
+  return [];
 }
 
 export function normalizeJob(raw: unknown): ProcurementJob {
@@ -235,6 +361,16 @@ export function normalizeJob(raw: unknown): ProcurementJob {
             c.position && VALID_COL_POSITIONS.includes(c.position) ? c.position : 'after_no',
         }))
     : [];
+
+  const columnOrder: string[] | undefined = Array.isArray(src.columnOrder)
+    ? Array.from(
+        new Set(
+          src.columnOrder.filter(
+            (k): k is string => typeof k === 'string' && k.trim().length > 0
+          )
+        )
+      )
+    : undefined;
 
   const rawItems = Array.isArray(src.items) ? src.items : [];
   const items: JobItemRow[] = Array.from({ length: 20 }, (_, idx) => {
@@ -340,6 +476,7 @@ export function normalizeJob(raw: unknown): ProcurementJob {
       ),
     },
     customColumns,
+    columnOrder,
     items,
     issuedDocs,
   };
@@ -362,6 +499,7 @@ export function normalizeRegistryEntries(raw: unknown): RegistryEntry[] {
     ) {
       continue;
     }
+    if (e.jobId === 'legacy-seed-042') continue;
     valid.push({
       sequence: Math.floor(e.sequence),
       docNumber: e.docNumber.trim(),
@@ -417,18 +555,18 @@ export function saveJobs(jobs: ProcurementJob[]): boolean {
 export function loadRegistryWithHealth(): { entries: RegistryEntry[]; recovered: boolean } {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.REGISTRY);
-    if (!raw) return { entries: createSeededRegistry(), recovered: false };
+    if (!raw) return { entries: [], recovered: false };
     const parsed = JSON.parse(raw);
-    const cleaned = normalizeRegistryEntries(parsed);
-    if (cleaned.length === 0) {
-      return { entries: createSeededRegistry(), recovered: true };
+    if (!Array.isArray(parsed)) {
+      return { entries: [], recovered: true };
     }
+    const cleaned = normalizeRegistryEntries(parsed);
     return {
       entries: cleaned,
-      recovered: Array.isArray(parsed) && cleaned.length !== parsed.length,
+      recovered: cleaned.length !== parsed.length,
     };
   } catch {
-    return { entries: createSeededRegistry(), recovered: true };
+    return { entries: [], recovered: true };
   }
 }
 
@@ -478,7 +616,7 @@ export function saveActiveJobId(id: string): void {
 }
 
 export function getNextSequenceNumber(entries: RegistryEntry[]): number {
-  const maxSeq = entries.reduce((max, e) => (e.sequence > max ? e.sequence : max), 42);
+  const maxSeq = entries.reduce((max, e) => (e.sequence > max ? e.sequence : max), 0);
   return maxSeq + 1;
 }
 

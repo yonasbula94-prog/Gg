@@ -1,6 +1,6 @@
 import React from 'react';
 import { Lock } from 'lucide-react';
-import { EXCEL_THEMES, MARKUP_RATES } from '../constants/themes';
+import { MARKUP_RATES } from '../constants/themes';
 import {
   ConfirmDialogRequest,
   FreightConfig,
@@ -10,15 +10,16 @@ import {
   MarkupRate,
   PlatformMode,
   ProcurementJob,
-  ThemeVariantId,
+  ThemePalette,
 } from '../types/procurement';
 import { formatMoney, formatNumber, formatPct } from '../utils/calculations';
+import { HelpTip } from './HelpTip';
 import { IPadJobEditor } from './IPadJobEditor';
 
 interface PriceCalcViewProps {
   job: ProcurementJob;
   calc: JobCalculationSummary;
-  themeId: ThemeVariantId;
+  theme: ThemePalette;
   platformMode: PlatformMode;
   onUpdateItem: (rowNumber: number, patch: Partial<JobItemRow>) => void;
   onUpdateFreight: (patch: Partial<FreightConfig>) => void;
@@ -36,14 +37,13 @@ function parseOptionalNumber(val: string): number | null {
 export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
   job,
   calc,
-  themeId,
+  theme,
   platformMode,
   onUpdateItem,
   onUpdateFreight,
   onUpdateControls,
   onRequestConfirm,
 }) => {
-  const theme = EXCEL_THEMES[themeId];
   const curr = job.controls.currency;
   const activeMarkup = job.freight.selectedMarkupPct;
   const isPresetMarkup = MARKUP_RATES.some((r) => Math.abs(r - activeMarkup) < 0.0001);
@@ -55,21 +55,16 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
   return (
     <div className="space-y-6">
       {/* Confidential internal notice */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50/70 px-4 sm:px-5 py-3.5">
-        <div className="flex items-start sm:items-center gap-2.5 text-sm text-red-900">
-          <Lock className="w-4 h-4 text-red-700 shrink-0 mt-0.5 sm:mt-0" />
-          <div>
-            <span className="font-semibold">Internal Cost Sheet (PRICE CALC)</span>
-            <span aria-hidden="true" className="mx-1.5 text-red-300">·</span>
-            <span className="text-red-800">
-              Holds supplier costs, markup scenarios &amp; internal VAT provision. Automatically excluded from customer exports.
-            </span>
-          </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50/70 px-4 sm:px-5 py-3">
+        <div className="flex items-center gap-2 text-sm text-red-900">
+          <Lock className="w-4 h-4 text-red-700 shrink-0" />
+          <span className="font-semibold">Internal Cost Sheet (PRICE CALC)</span>
+          <HelpTip text="Holds confidential supplier costs, markup scenarios, and internal VAT provision. Automatically excluded from all customer-facing exports (PI, QT, CI, PL, DN)." />
         </div>
         <div className="text-xs text-red-800 font-mono-tabular">
           {effectiveVat > 0
-            ? `Unit Price = Cost × (1 + Markup %) × (1 + ${formatPct(effectiveVat)} VAT) · VAT hidden on customer docs`
-            : 'Unit Price = Cost × (1 + Markup %) · Internal VAT Removed (0%)'}
+            ? `Unit Price = Cost × (1 + Markup) × (1 + ${formatPct(effectiveVat)} VAT)`
+            : 'Unit Price = Cost × (1 + Markup) · VAT Off'}
         </div>
       </div>
 
@@ -78,8 +73,9 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-end">
           {/* Active Markup Selector (E3) — Presets + Any Custom % */}
           <div className="lg:col-span-6 space-y-2">
-            <label className="block text-xs font-medium text-slate-600">
-              Active Markup % (Cell E3 — Tap Preset or Type Any Custom %)
+            <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+              <span>Active Markup % (Cell E3)</span>
+              <HelpTip text="Tap any quick preset (10%, 15%, 18%, 20%) or type any custom percentage (0%–500%). Feeds customer Unit Prices and Freight automatically." />
             </label>
             <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
               <div className="flex-1 grid grid-cols-4 gap-1.5 p-1 rounded-lg bg-slate-100 min-w-[210px]">
@@ -143,8 +139,9 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
 
           {/* Internal VAT Provision (Cell E4 — Baked into Unit Price, Hidden from End User) */}
           <div className="lg:col-span-6 space-y-2">
-            <label className="block text-xs font-medium text-slate-600">
-              Internal VAT Provision (Cell E4 — Included in Unit Price, Never Shown to End User)
+            <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+              <span>Internal VAT Provision (Cell E4)</span>
+              <HelpTip text="Included inside every customer Unit Price (Col R) and never shown as a separate VAT line on PI, QT, or CI. Toggle Remove VAT (0%) for VAT-exempt orders." />
             </label>
             <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
               <div className="inline-flex rounded-lg bg-slate-100 p-1 shrink-0">
@@ -389,7 +386,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
             items={job.items}
             computedRows={calc.rows}
             currency={curr}
-            themeId={themeId}
+            theme={theme}
             activeMarkupPct={activeMarkup}
             effectiveVatRate={effectiveVat}
             onUpdateItem={onUpdateItem}
@@ -399,16 +396,17 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
       ) : (
         <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 border-b border-slate-200 bg-slate-50/70">
-            <div>
+            <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold text-slate-900">
-                Costing &amp; Logistics Matrix (Excel Rows 17–36)
+                Costing &amp; Logistics Matrix (Rows 17–36)
               </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Blue values are editable inputs · Black values are live formulas ·{' '}
-                {effectiveVat > 0
-                  ? `Selling unit prices include ${formatPct(effectiveVat)} internal VAT`
-                  : 'Internal VAT is currently OFF (0%)'}
-              </p>
+              <HelpTip
+                text={`Blue numbers are editable inputs; black numbers are live formulas. ${
+                  effectiveVat > 0
+                    ? `Customer Unit Prices (Col R) include ${formatPct(effectiveVat)} internal VAT.`
+                    : 'Internal VAT is currently OFF (0%).'
+                }`}
+              />
             </div>
             <div className="text-xs text-slate-600 font-mono-tabular">
               Active Items: {calc.activeRowCount} / 20 · Supplier Total: {formatMoney(calc.totalSupplierCost, curr)}
@@ -606,12 +604,12 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
       {/* Freight Basis Comparison & Internal Profitability Breakdown */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="rounded-lg border border-slate-200 bg-white p-5">
-          <h3 className="text-sm font-semibold text-slate-900">
-            Freight Calculation Breakdown (MAX Basis)
-          </h3>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Higher of CBM or Gross KG freight → add Documentation Charge → apply selected {formatPct(activeMarkup)} markup.
-          </p>
+          <div className="flex items-center gap-1.5">
+            <h3 className="text-sm font-semibold text-slate-900">
+              Freight Calculation Breakdown (MAX Basis)
+            </h3>
+            <HelpTip text={`Takes the higher of Volume (CBM) or Weight (Gross KG) freight, adds the Documentation Charge (${formatPct(job.freight.docChargePct)}), then applies the active ${formatPct(activeMarkup)} markup.`} />
+          </div>
 
           <div className="mt-4 divide-y divide-slate-100 text-sm font-mono-tabular">
             <div className="flex justify-between py-2">
@@ -660,14 +658,18 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
         </div>
 
         <div className="rounded-lg border border-slate-200 bg-white p-5">
-          <h3 className="text-sm font-semibold text-slate-900">
-            Job Profitability &amp; Internal VAT Summary
-          </h3>
-          <p className="text-xs text-slate-500 mt-0.5">
-            {effectiveVat > 0
-              ? `Internal VAT (${formatPct(effectiveVat)}) is baked into every customer Unit Price — end-user documents show Goods Subtotal + Freight only.`
-              : 'Internal VAT is removed (0%) — customer Unit Prices reflect Supplier Cost + Markup only.'}
-          </p>
+          <div className="flex items-center gap-1.5">
+            <h3 className="text-sm font-semibold text-slate-900">
+              Job Profitability &amp; Internal VAT Summary
+            </h3>
+            <HelpTip
+              text={
+                effectiveVat > 0
+                  ? `Internal VAT (${formatPct(effectiveVat)}) is baked into every customer Unit Price — end-user documents show Goods Subtotal + Freight only.`
+                  : 'Internal VAT is removed (0%) — customer Unit Prices reflect Supplier Cost + Markup only.'
+              }
+            />
+          </div>
 
           <div className="mt-4 divide-y divide-slate-100 text-sm font-mono-tabular">
             <div className="flex justify-between py-2">

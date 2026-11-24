@@ -4,6 +4,24 @@ export type MarkupRate = 0.1 | 0.15 | 0.18 | 0.2;
 
 export type ThemeVariantId = 'v1' | 'v2' | 'v3';
 
+export type DocumentFontId =
+  | 'Calibri'
+  | 'Arial'
+  | 'Georgia'
+  | 'Segoe UI'
+  | 'Times New Roman'
+  | 'Verdana';
+
+export interface ThemeCustomization {
+  primary?: string;
+  accent?: string;
+  totalBg?: string;
+  secondaryBg?: string;
+  headerText?: string;
+  bodyText?: string;
+  fontFamily?: DocumentFontId;
+}
+
 export type PlatformMode = 'windows' | 'ipad';
 
 export type WorkspaceTab =
@@ -15,6 +33,7 @@ export type WorkspaceTab =
   | 'DN'
   | 'CI'
   | 'REGISTRY'
+  | 'FILES'
   | 'STUDIO';
 
 export interface CompanyProfile {
@@ -28,6 +47,7 @@ export interface CompanyProfile {
   bankDetails: string;
   logoDataUrl: string;
   endUsers: string[];
+  endUserAddresses: Record<string, string>;
 }
 
 export interface ThemePalette {
@@ -35,9 +55,13 @@ export interface ThemePalette {
   name: string;
   shortLabel: string;
   subtitle: string;
+  // Typography for Print / Excel
+  fontName: DocumentFontId;
+  fontCss: string;
   // Hex colors for UI / Print
   primary: string;
   primaryText: string;
+  bodyText: string;
   secondaryBg: string;
   accent: string;
   zebraRow: string;
@@ -155,6 +179,7 @@ export interface ProcurementJob {
   controls: JobControls;
   freight: FreightConfig;
   customColumns?: CustomColumnDef[];
+  columnOrder?: string[]; // Custom visual order of standard + extra columns across all 6 docs
   items: JobItemRow[]; // Always length 20, rowNumber 17..36
   issuedDocs: Partial<Record<DocPrefix, IssuedDocRecord>>;
 }

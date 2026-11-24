@@ -29,7 +29,7 @@ export const PWAInstallButton: React.FC = () => {
         setShowIOSGuide(true);
       }
     } catch {
-      setDownloadErr('Download blocked—try in Excel Studio.');
+      setDownloadErr('Download blocked—try in Import & Export.');
     } finally {
       setDownloading(null);
     }
