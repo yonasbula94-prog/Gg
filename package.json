@@ -9,7 +9,8 @@
     "build:offline": "vite build --config vite.singlefile.config.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist dist-offline",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "bun test tests/"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

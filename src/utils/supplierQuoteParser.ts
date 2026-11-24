@@ -232,6 +232,9 @@ export function guessColumnRolesForHeaderRow(headerCells: string[]): {
     const low = raw.toLowerCase().replace(/\s+/g, ' ').trim();
     if (!low) return;
 
+    // Metadata labels such as "Incoterm: CIF" or "Payment Terms: 30%" are not column headers
+    if (/^[a-z][a-z ./-]{1,30}:/.test(low)) return;
+
     // Skip pure serial / line-no headers so they aren't confused with Part No.
     if (/^(#|s\.?n\.?|sr\.?\s*no\.?|sl\.?\s*no\.?|no\.?|pos\.?|line|item\s*#?)$/.test(low)) {
       return;
@@ -271,7 +274,7 @@ export function guessColumnRolesForHeaderRow(headerCells: string[]): {
       hasQty = true;
     } else if (
       !hasUnitPrice &&
-      /\b(unit\s*price|u\/price|u\.?\s*price|unit\s*cost|unit\s*rate|rate|price\s*per|net\s*price|exw|fob|cif|einzelpreis|preis|prix\s*unitaire|price|cost)\b/i.test(
+      /\b(unit\s*price|u\/price|u\.?\s*price|unit\s*cost|unit\s*rate|rate|price\s*per|net\s*price|einzelpreis|preis|prix\s*unitaire|price|cost)\b/i.test(
         low
       ) &&
       !/total|amount|ext\.?|sum|gesamt/i.test(low)
@@ -1156,21 +1159,35 @@ export function parsePastedSupplierQuote(
 
     // Strategy B: Single-space PDF row heuristic: "<item desc> <qty> <uom?> <unitPrice> <total?>"
     const singleMatch = line.match(
-      /^(?:\d{1,2}[.)]?\s+)?(.{4,115}?)\s+(\d+(?:[.,]\d+)?)\s+(?:(PCS|PC|EA|EACH|NOS|SET|KG|LTR|MTR|ROLL|BOX|PACK|PAIR|UNIT|UNITS|KIT|DRUM)\s+)?(?:USD|AED|EUR|GBP|SAR|\$|€|£)?\s*([\d,.]+[.,]\d{2})(?:\s+(?:USD|AED|EUR|GBP|SAR|\$|€|£)?\s*([\d,.]+[.,]\d{2}))?$/i
+      /^(?:\d{1,2}[.)]?\s+)?(.{4,115}?)\s+(?:(PCS|PC|EA|EACH|NOS|SET|KG|LTR|MTR|ROLL|BOX|PACK|PAIR|UNIT|UNITS|KIT|DRUM)\s+)?(\d+(?:[.,]\d+)?)\s+(?:(PCS|PC|EA|EACH|NOS|SET|KG|LTR|MTR|ROLL|BOX|PACK|PAIR|UNIT|UNITS|KIT|DRUM)\s+)?(?:USD|AED|EUR|GBP|SAR|\$|€|£)?\s*([\d,.]+[.,]\d{2})(?:\s+(?:USD|AED|EUR|GBP|SAR|\$|€|£)?\s*([\d,.]+[.,]\d{2}))?$/i
     );
     if (singleMatch) {
-      const desc = singleMatch[1].trim();
-      const qty = parseFlexibleNumber(singleMatch[2]);
-      const uom = normalizeUom(singleMatch[3] || 'PCS');
-      const unitPrice = parseFlexibleNumber(singleMatch[4]);
+      let desc = singleMatch[1].trim();
+      let uomRaw = singleMatch[4] || singleMatch[2] || '';
+      const qty = parseFlexibleNumber(singleMatch[3]);
+      const unitPrice = parseFlexibleNumber(singleMatch[5]);
+      // A UoM word left at the end of the description ("... Seal Kit PCS") is moved to the UoM column
+      const tailUom = desc.match(/\s(PCS|PC|EA|EACH|NOS|SET|KG|LTR|MTR|ROLL|BOX|PACK|PAIR|UNIT|UNITS|KIT|DRUM)$/i);
+      if (tailUom && !uomRaw) {
+        uomRaw = tailUom[1];
+        desc = desc.slice(0, -tailUom[0].length).trim();
+      }
+      // A part number at the start ("PN-4402 Hydraulic Seal Kit") is the code. Needs a letter and a digit so "100 mm pipe" is not a code.
+      let code = '';
+      const casMatch = desc.match(/\b(\d{2,7}-\d{2}-\d)\b/);
+      const lead = desc.match(/^([A-Z0-9][A-Z0-9._\/-]{2,22})\s+(?=\S)/i);
+      if (casMatch) code = casMatch[1];
+      else if (lead && /[A-Z]/i.test(lead[1]) && /\d/.test(lead[1])) {
+        code = lead[1];
+        desc = desc.slice(lead[0].length).trim();
+      }
       if (desc && !isSummaryOrNoiseRow(desc) && qty && unitPrice !== null) {
-        const casMatch = desc.match(/\b(\d{2,7}-\d{2}-\d)\b/);
         items.push({
           id: `pdf-row-${i}`,
           selected: true,
-          code: casMatch ? casMatch[1] : '',
+          code,
           description: desc,
-          uom,
+          uom: normalizeUom(uomRaw || 'PCS'),
           qty,
           unitPrice,
         });

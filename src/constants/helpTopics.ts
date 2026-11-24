@@ -112,8 +112,8 @@ export const HELP_TOPICS: HelpTopic[] = [
         fix: 'Open the Column Mapper Assistant and map the columns by hand.',
       },
     ],
-    screenshot: 'import-export.jpg',
-    screenshotCaption: 'Import & Export: the upload starts here, or with "Open .xlsx / .pdf" in the top bar.',
+    screenshot: 'import-review.jpg',
+    screenshotCaption: 'Review Items: check the supplier details and each line before loading it.',
   },
   {
     id: 'pricecalc',
