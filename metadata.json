@@ -1,0 +1,6 @@
+{
+  "name": "Grand Group FZC Procurement",
+  "description": "Offline-first procurement document workstation for Grand Group FZC with live Excel pricing calculations, 3-variant Excel styling, Master Registry numbering, A4 print views, and styled .xlsx import/export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

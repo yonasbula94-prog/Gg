@@ -1,0 +1,1495 @@
+import ExcelJS from 'exceljs';
+import {
+  DOC_META,
+  END_USER_OPTIONS,
+  EXCEL_THEMES,
+} from '../constants/themes';
+import {
+  CompanyProfile,
+  ComputedRow,
+  CustomColumnDef,
+  CustomColumnPosition,
+  DocPrefix,
+  JobItemRow,
+  ProcurementJob,
+  RegistryEntry,
+  ThemePalette,
+  ThemeVariantId,
+} from '../types/procurement';
+import { calculateJob, formatPct, getResolvedEndUser } from './calculations';
+import { createBlankJob } from '../store/storage';
+import { shareOrDownloadBlob } from './platform';
+import { ParsedSupplierQuote, parseGenericSupplierXlsx } from './supplierQuoteParser';
+
+function filterCustomCols(
+  cols: CustomColumnDef[],
+  pos: CustomColumnPosition
+): CustomColumnDef[] {
+  return cols.filter((c) => (c.position || 'after_no') === pos);
+}
+
+function colToLetter(colNum: number): string {
+  let n = colNum;
+  let letters = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    letters = String.fromCharCode(65 + rem) + letters;
+    n = Math.floor((n - 1) / 26);
+  }
+  return letters;
+}
+
+async function triggerDownload(buffer: ArrayBuffer, filename: string): Promise<void> {
+  const mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const blob = new Blob([buffer], { type: mime });
+  await shareOrDownloadBlob(blob, filename, mime);
+}
+
+function thinBorder(argb: string): Partial<ExcelJS.Border> {
+  return { style: 'thin', color: { argb } };
+}
+
+function mediumBorder(argb: string): Partial<ExcelJS.Border> {
+  return { style: 'medium', color: { argb } };
+}
+
+function detectImageExtension(dataUrl: string): 'png' | 'jpeg' {
+  if (dataUrl.startsWith('data:image/jpeg') || dataUrl.startsWith('data:image/jpg')) {
+    return 'jpeg';
+  }
+  return 'png';
+}
+
+function styleBannerHeader(
+  wb: ExcelJS.Workbook,
+  ws: ExcelJS.Worksheet,
+  theme: ThemePalette,
+  company: CompanyProfile,
+  docTitle: string,
+  docNumber: string,
+  colCount: number
+): void {
+  // Col A is clean 2-char margin spacer; content spans Col B .. Col (colCount + 1)
+  const lastCol = colCount + 1;
+
+  ws.getRow(1).height = 8;
+
+  // Row 2: Brand banner with embedded logo in Col B (white tile) + Company name in Col C..
+  ws.getRow(2).height = 44;
+
+  if (company.logoDataUrl && company.logoDataUrl.startsWith('data:image/')) {
+    try {
+      const imgId = wb.addImage({
+        base64: company.logoDataUrl,
+        extension: detectImageExtension(company.logoDataUrl),
+      });
+      // White clean pad cell behind logo for crisp contrast on dark theme header
+      ws.getCell(2, 2).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFFFFF' },
+      };
+      ws.addImage(imgId, {
+        tl: { col: 1.08, row: 1.08 },
+        ext: { width: 46, height: 48 },
+      });
+    } catch {
+      // Fallback cleanly if custom logo is unreadable
+    }
+  }
+
+  ws.mergeCells(2, 3, 2, lastCol - 2);
+  const brandCell = ws.getCell(2, 3);
+  brandCell.value = company.name;
+  brandCell.font = { name: 'Calibri', size: 16, bold: true, color: { argb: theme.excel.headerFont } };
+  brandCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+
+  ws.mergeCells(2, lastCol - 1, 2, lastCol);
+  const titleCell = ws.getCell(2, lastCol - 1);
+  titleCell.value = docTitle;
+  titleCell.font = { name: 'Calibri', size: 13, bold: true, color: { argb: theme.excel.headerFont } };
+  titleCell.alignment = { vertical: 'middle', horizontal: 'right', indent: 1 };
+
+  for (let c = 3; c <= lastCol; c++) {
+    ws.getCell(2, c).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: theme.excel.headerFill },
+    };
+  }
+  if (!company.logoDataUrl) {
+    ws.getCell(2, 2).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: theme.excel.headerFill },
+    };
+  }
+
+  // Row 3: Subtitle + hard-coded document number
+  ws.mergeCells(3, 2, 3, lastCol - 2);
+  const subCell = ws.getCell(3, 2);
+  subCell.value = `${company.addressLine1}, ${company.addressLine2}  |  ${company.email}`;
+  subCell.font = { name: 'Calibri', size: 9, color: { argb: 'FF475569' } };
+  subCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+
+  ws.mergeCells(3, lastCol - 1, 3, lastCol);
+  const docNoCell = ws.getCell(3, lastCol - 1);
+  docNoCell.value = `DOC NO: ${docNumber}`;
+  docNoCell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.strongBorderColor } };
+  docNoCell.alignment = { vertical: 'middle', horizontal: 'right', indent: 1 };
+
+  ws.getRow(3).height = 20;
+  for (let c = 2; c <= lastCol; c++) {
+    ws.getCell(3, c).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: theme.excel.subHeaderFill },
+    };
+    ws.getCell(3, c).border = {
+      bottom: mediumBorder(theme.excel.accentFill),
+    };
+  }
+}
+
+/**
+ * 1. VALUES-ONLY STYLED .XLSX PER ISSUED DOCUMENT
+ * Strictly excludes PRICE CALC, controls block, and macros.
+ * Hard-codes the claimed Document No. and freezes values.
+ */
+export async function exportIssuedDocumentXlsx(
+  job: ProcurementJob,
+  prefix: DocPrefix,
+  themeId: ThemeVariantId,
+  company: CompanyProfile
+): Promise<string> {
+  const theme = EXCEL_THEMES[themeId];
+  const meta = DOC_META[prefix];
+  const calc = calculateJob(job);
+  const issued = job.issuedDocs[prefix];
+  const docNumber = issued?.docNumber || `DRAFT-${prefix}`;
+  const endUser = getResolvedEndUser(job) || '—';
+  const isLogistics = prefix === 'PL' || prefix === 'DN';
+  const isPO = prefix === 'PO';
+  const customCols = job.customColumns || [];
+  const customCount = customCols.length;
+  const colCount = (isLogistics ? 8 : 7) + customCount;
+  const lastCol = colCount + 1;
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = company.name;
+  wb.created = new Date();
+
+  const ws = wb.addWorksheet(meta.sheetName, {
+    views: [{ showGridLines: false, state: 'frozen', ySplit: 11 }],
+    pageSetup: {
+      paperSize: 9, // A4
+      orientation: isLogistics || customCount > 0 ? 'landscape' : 'portrait',
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      margins: { left: 0.4, right: 0.4, top: 0.45, bottom: 0.45, header: 0.2, footer: 0.2 },
+    },
+  });
+
+  interface IssuedColSpec {
+    key: string;
+    header: string;
+    width: number;
+    align: 'left' | 'center' | 'right';
+    wrapText?: boolean;
+    numFmt?: string;
+    getValue: (row: ComputedRow, idx: number) => string | number | null;
+  }
+
+  const makeCustomSpecs = (pos: CustomColumnPosition): IssuedColSpec[] =>
+    filterCustomCols(customCols, pos).map((cc) => ({
+      key: `custom:${cc.id}`,
+      header: cc.label,
+      width: 16,
+      align: 'left',
+      wrapText: true,
+      getValue: (row) => row.customFields?.[cc.id] || '',
+    }));
+
+  const colSpecs: IssuedColSpec[] = [
+    {
+      key: 'no',
+      header: 'No.',
+      width: 6,
+      align: 'center',
+      getValue: (_row, idx) => idx + 1,
+    },
+    ...makeCustomSpecs('after_no'),
+    {
+      key: 'requested',
+      header: 'Requested Description',
+      width: 26,
+      align: 'left',
+      wrapText: true,
+      getValue: (row) => row.requestedDescription,
+    },
+    ...makeCustomSpecs('after_requested'),
+    {
+      key: 'offered',
+      header: 'Offered Description',
+      width: 30,
+      align: 'left',
+      wrapText: true,
+      getValue: (row) => row.offeredDescription,
+    },
+    ...makeCustomSpecs('after_offered'),
+    {
+      key: 'uom',
+      header: 'UoM',
+      width: 9,
+      align: 'center',
+      getValue: (row) => row.uom,
+    },
+    {
+      key: 'qty',
+      header: 'Qty',
+      width: 9,
+      align: 'right',
+      numFmt: '#,##0.##',
+      getValue: (row) => row.qty,
+    },
+    ...makeCustomSpecs('after_qty'),
+    ...(isLogistics
+      ? ([
+          {
+            key: 'carton',
+            header: 'Carton No.',
+            width: 15,
+            align: 'center',
+            getValue: (row) => row.cartonNo,
+          },
+          {
+            key: 'netWt',
+            header: 'Net Wt (KG)',
+            width: 14,
+            align: 'right',
+            numFmt: '#,##0.00',
+            getValue: (row) => row.netWtKg,
+          },
+          {
+            key: 'grossWt',
+            header: 'Gross Wt (KG)',
+            width: 14,
+            align: 'right',
+            numFmt: '#,##0.00',
+            getValue: (row) => row.grossWtKg,
+          },
+        ] as IssuedColSpec[])
+      : isPO
+      ? ([
+          {
+            key: 'price',
+            header: `Unit Cost (${job.controls.currency})`,
+            width: 16,
+            align: 'right',
+            numFmt: '#,##0.00',
+            getValue: (row) => row.supplierUnitCost,
+          },
+          {
+            key: 'total',
+            header: `Total Cost (${job.controls.currency})`,
+            width: 17,
+            align: 'right',
+            numFmt: '#,##0.00',
+            getValue: (row) => row.supplierTotalCost,
+          },
+        ] as IssuedColSpec[])
+      : ([
+          {
+            key: 'price',
+            header: `Unit Price (${job.controls.currency})`,
+            width: 16,
+            align: 'right',
+            numFmt: '#,##0.00',
+            getValue: (row) => row.activeUnitPrice,
+          },
+          {
+            key: 'total',
+            header: `Total Price (${job.controls.currency})`,
+            width: 17,
+            align: 'right',
+            numFmt: '#,##0.00',
+            getValue: (row) => row.activeTotalPrice,
+          },
+        ] as IssuedColSpec[])),
+    ...makeCustomSpecs('end'),
+  ];
+
+  // Column widths (Col A is margin spacer; Col B..lastCol match colSpecs)
+  ws.columns = [{ width: 2 }, ...colSpecs.map((c) => ({ width: c.width }))];
+
+  styleBannerHeader(wb, ws, theme, company, meta.title, docNumber, colCount);
+
+  // Metadata Block (Rows 5..9)
+  const issueDate = issued
+    ? new Date(issued.issuedAt).toISOString().slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+
+  const leftMeta: [string, string][] = isPO
+    ? [
+        ['SUPPLIER', job.controls.supplierName || '—'],
+        ['ADDRESS', job.controls.supplierAddress || '—'],
+        ['SUPPLIER REF', job.controls.supplierRef || '—'],
+        ['INCOTERM', `${job.controls.incoterm} · ${job.controls.destination}`],
+        ['CURRENCY', job.controls.currency],
+      ]
+    : [
+        [meta.recipientLabel, endUser],
+        ['ATTN / CONTACT', job.controls.endUserContact || '—'],
+        ['ADDRESS', job.controls.endUserAddress || '—'],
+        ['INCOTERM / DEST', `${job.controls.incoterm} · ${job.controls.destination}`],
+        ['CURRENCY', job.controls.currency],
+      ];
+
+  const rightMeta: [string, string][] =
+    prefix === 'PL'
+      ? [
+          ['DATE', issueDate],
+          ['SHIP DATE', job.controls.shipDate || '—'],
+          ['PORT OF LOADING', job.controls.portOfLoading || '—'],
+          ['PI REFERENCE', job.issuedDocs.PI?.docNumber || '—'],
+          ['TOTAL BOXES', String(calc.totalBoxes || '—')],
+        ]
+      : prefix === 'DN'
+      ? [
+          ['DATE', issueDate],
+          ['DELIVERY DATE', job.controls.deliveryDate || '—'],
+          ['TRANSPORT REF', job.controls.transportRef || '—'],
+          ['RECEIVED BY', job.controls.receivedBy || '—'],
+          ['PI REFERENCE', job.issuedDocs.PI?.docNumber || '—'],
+        ]
+      : [
+          ['DATE', issueDate],
+          ['RFQ / TENDER REF', job.controls.rfqRef || '—'],
+          ['CUSTOMER PO REF', job.controls.customerPoRef || '—'],
+          ['PAYMENT TERMS', job.controls.paymentTerms || '—'],
+          ['LEAD TIME', job.controls.deliveryLeadTime || '—'],
+        ];
+
+  ws.getRow(4).height = 8;
+  const rightLabelCol = Math.max(6, lastCol - 2);
+  const rightValStart = rightLabelCol + 1;
+  for (let i = 0; i < 5; i++) {
+    const r = 5 + i;
+    ws.getRow(r).height = 19;
+
+    ws.getCell(r, 2).value = leftMeta[i][0];
+    ws.getCell(r, 2).font = { name: 'Calibri', size: 9, bold: true, color: { argb: 'FF64748B' } };
+    ws.mergeCells(r, 3, r, rightLabelCol - 2);
+    ws.getCell(r, 3).value = leftMeta[i][1];
+    ws.getCell(r, 3).font = { name: 'Calibri', size: 10, bold: i === 0, color: { argb: 'FF0F172A' } };
+
+    ws.getCell(r, rightLabelCol).value = rightMeta[i][0];
+    ws.getCell(r, rightLabelCol).font = { name: 'Calibri', size: 9, bold: true, color: { argb: 'FF64748B' } };
+    if (lastCol > rightValStart) {
+      ws.mergeCells(r, rightValStart, r, lastCol);
+    }
+    ws.getCell(r, rightValStart).value = rightMeta[i][1];
+    ws.getCell(r, rightValStart).font = { name: 'Calibri', size: 10, bold: i === 0, color: { argb: 'FF0F172A' } };
+    ws.getCell(r, rightValStart).alignment = { horizontal: 'right', vertical: 'middle' };
+  }
+
+  ws.getRow(10).height = 10;
+
+  // Table Headers (Row 11)
+  const headerRow = ws.getRow(11);
+  headerRow.height = 26;
+  colSpecs.forEach((spec, idx) => {
+    const cell = headerRow.getCell(idx + 2);
+    cell.value = spec.header;
+    cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.headerFont } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+    cell.alignment = {
+      vertical: 'middle',
+      horizontal: spec.align,
+      wrapText: true,
+    };
+    cell.border = {
+      bottom: mediumBorder(theme.excel.strongBorderColor),
+    };
+  });
+
+  // Populated Line Items (values only, no phantom zeros)
+  const activeRows = calc.rows.filter((r) => !r.isEmpty);
+  let cursor = 12;
+
+  activeRows.forEach((row, idx) => {
+    const r = ws.getRow(cursor);
+    r.height = 24;
+    const isZebra = idx % 2 === 1;
+
+    colSpecs.forEach((spec, cIdx) => {
+      const v = spec.getValue(row, idx);
+      const cell = r.getCell(cIdx + 2);
+      cell.value = v === null || v === undefined ? '' : v;
+      cell.font = { name: 'Calibri', size: 10, color: { argb: 'FF0F172A' } };
+      if (isZebra) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.zebraFill } };
+      }
+      cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+      cell.alignment = {
+        vertical: 'middle',
+        horizontal: spec.align,
+        wrapText: Boolean(spec.wrapText),
+      };
+      if (spec.numFmt && typeof v === 'number') {
+        cell.numFmt = spec.numFmt;
+      }
+    });
+    cursor += 1;
+  });
+
+  // Dynamic column lookup helper for totals alignment
+  const colNumOf = (key: string) => colSpecs.findIndex((c) => c.key === key) + 2;
+
+  // Summary / Totals Block
+  cursor += 1;
+  if (isLogistics) {
+    const qtyCol = colNumOf('qty');
+    const cartonCol = colNumOf('carton');
+    const netWtCol = colNumOf('netWt');
+    const grossWtCol = colNumOf('grossWt');
+    const totRow = ws.getRow(cursor);
+    totRow.height = 24;
+    ws.mergeCells(cursor, 2, cursor, qtyCol - 1);
+    totRow.getCell(2).value = 'SHIPMENT TOTALS';
+    totRow.getCell(2).font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.strongBorderColor } };
+    totRow.getCell(2).alignment = { horizontal: 'right', vertical: 'middle' };
+
+    totRow.getCell(qtyCol).value = calc.totalQty;
+    totRow.getCell(qtyCol).numFmt = '#,##0.##';
+    totRow.getCell(qtyCol).alignment = { horizontal: 'right', vertical: 'middle' };
+    totRow.getCell(cartonCol).value = `${calc.totalBoxes} CTNS`;
+    totRow.getCell(cartonCol).alignment = { horizontal: 'center', vertical: 'middle' };
+    totRow.getCell(netWtCol).value = calc.plTotalNetWt;
+    totRow.getCell(netWtCol).numFmt = '#,##0.00';
+    totRow.getCell(netWtCol).alignment = { horizontal: 'right', vertical: 'middle' };
+    totRow.getCell(grossWtCol).value = calc.plTotalGrossWt;
+    totRow.getCell(grossWtCol).numFmt = '#,##0.00';
+    totRow.getCell(grossWtCol).alignment = { horizontal: 'right', vertical: 'middle' };
+
+    for (let c = 2; c <= lastCol; c++) {
+      const cell = totRow.getCell(c);
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.totalFill } };
+      cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.strongBorderColor } };
+      cell.border = {
+        top: thinBorder(theme.excel.strongBorderColor),
+        bottom: mediumBorder(theme.excel.strongBorderColor),
+      };
+    }
+    cursor += 2;
+  } else if (isPO) {
+    const valCol = colNumOf('total');
+    const labelStartCol = Math.max(2, valCol - 2);
+    const totRow = ws.getRow(cursor);
+    totRow.height = 26;
+    if (valCol - 1 > labelStartCol) {
+      ws.mergeCells(cursor, labelStartCol, cursor, valCol - 1);
+    }
+    totRow.getCell(labelStartCol).value = `TOTAL ORDER COST (${job.controls.currency})`;
+    totRow.getCell(labelStartCol).alignment = { horizontal: 'right', vertical: 'middle' };
+    totRow.getCell(valCol).value = calc.totalSupplierCost;
+    totRow.getCell(valCol).numFmt = '#,##0.00';
+    totRow.getCell(valCol).alignment = { horizontal: 'right', vertical: 'middle' };
+    for (let c = labelStartCol; c <= valCol; c++) {
+      totRow.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.totalFill } };
+      totRow.getCell(c).font = { name: 'Calibri', size: 11, bold: true, color: { argb: theme.excel.strongBorderColor } };
+      totRow.getCell(c).border = {
+        top: thinBorder(theme.excel.strongBorderColor),
+        bottom: mediumBorder(theme.excel.strongBorderColor),
+      };
+    }
+    cursor += 2;
+  } else {
+    // QT / PI / CI: SUBTOTAL -> VAT (goods only) -> FREIGHT (separate line after VAT) -> GRAND TOTAL
+    const valCol = colNumOf('total');
+    const vatPctLabel = formatPct(job.controls.vatRate);
+    const summaryLines: [string, number, boolean][] = [
+      ['GOODS SUBTOTAL', calc.goodsSubtotal, false],
+      [`VAT (${vatPctLabel} on Goods)`, calc.vatAmount, false],
+      [`FREIGHT & DOCUMENTATION (${job.controls.incoterm})`, calc.customerFreight, false],
+      [`GRAND TOTAL (${job.controls.currency})`, calc.grandTotal, true],
+    ];
+
+    const labelStartCol = Math.max(2, valCol - 3);
+    summaryLines.forEach(([label, val, isGrand]) => {
+      const r = ws.getRow(cursor);
+      r.height = isGrand ? 26 : 21;
+      if (valCol - 1 > labelStartCol) {
+        ws.mergeCells(cursor, labelStartCol, cursor, valCol - 1);
+      }
+      const lCell = r.getCell(labelStartCol);
+      lCell.value = label;
+      lCell.alignment = { horizontal: 'right', vertical: 'middle' };
+
+      const vCell = r.getCell(valCol);
+      vCell.value = val;
+      vCell.numFmt = '#,##0.00';
+      vCell.alignment = { horizontal: 'right', vertical: 'middle' };
+
+      for (let c = labelStartCol; c <= valCol; c++) {
+        const cell = r.getCell(c);
+        cell.font = {
+          name: 'Calibri',
+          size: isGrand ? 11 : 10,
+          bold: isGrand,
+          color: { argb: isGrand ? theme.excel.strongBorderColor : 'FF0F172A' },
+        };
+        if (isGrand) {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.totalFill } };
+          cell.border = {
+            top: thinBorder(theme.excel.strongBorderColor),
+            bottom: mediumBorder(theme.excel.strongBorderColor),
+          };
+        } else {
+          cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+        }
+      }
+      cursor += 1;
+    });
+    cursor += 1;
+  }
+
+  // Footer Remarks & Authorization (100% editable per job; empty omits cleanly)
+  if (job.controls.remarks.trim()) {
+    ws.mergeCells(cursor, 2, cursor, lastCol);
+    const rem = ws.getCell(cursor, 2);
+    rem.value = `Remarks: ${job.controls.remarks.trim()}`;
+    rem.font = { name: 'Calibri', size: 9, italic: true, color: { argb: 'FF475569' } };
+    cursor += 1;
+  }
+
+  if (prefix === 'PI' || prefix === 'CI') {
+    ws.mergeCells(cursor, 2, cursor, lastCol);
+    const bank = ws.getCell(cursor, 2);
+    bank.value = `${company.bankDetails}  |  ${company.trn}`;
+    bank.font = { name: 'Calibri', size: 9, color: { argb: 'FF475569' } };
+    cursor += 2;
+  } else {
+    cursor += 1;
+  }
+
+  // Editable Signature Lines (left & right; leaving empty omits label cleanly)
+  const leftSig = (job.controls.authorizedSignatory ?? '').trim();
+  const rightSig = (job.controls.counterpartySignatory ?? '').trim();
+  if (leftSig || rightSig) {
+    if (leftSig) {
+      ws.getCell(cursor, 2).value = `${leftSig}: ___________________________`;
+      ws.getCell(cursor, 2).font = { name: 'Calibri', size: 9, bold: true, color: { argb: 'FF334155' } };
+    }
+    if (rightSig) {
+      const rightSigCol = Math.max(6, lastCol - 2);
+      ws.getCell(cursor, rightSigCol).value = `${rightSig}: ___________________________`;
+      ws.getCell(cursor, rightSigCol).font = { name: 'Calibri', size: 9, bold: true, color: { argb: 'FF334155' } };
+    }
+  }
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const safeDoc = docNumber.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const filename = `${safeDoc}_${meta.sheetName.replace(/\s+/g, '_')}.xlsx`;
+  await triggerDownload(buffer as ArrayBuffer, filename);
+  return filename;
+}
+
+/**
+ * 2. FULL LIVE-FORMULA GG_Job_Template.xlsx BUILDER
+ * Includes HOW TO USE, PROFORMA INVOICE (rows 17-36 + K:L controls + L5 VAT),
+ * PRICE CALC (E3 markup selector, 10/15/18/20% scenarios, Col R -> PI Unit Price, MAX freight + doc fee + markup),
+ * QUOTATION, SUPPLIER PO, PACKING LIST, DELIVERY NOTE, COMMERCIAL INVOICE, and CONTROLS (with Pharmecore fixed).
+ */
+export async function exportJobTemplateXlsx(
+  job: ProcurementJob,
+  themeId: ThemeVariantId,
+  includeCurrentData: boolean,
+  company: CompanyProfile
+): Promise<string> {
+  const theme = EXCEL_THEMES[themeId];
+  const wb = new ExcelJS.Workbook();
+  wb.creator = company.name;
+  wb.created = new Date();
+
+  // --- SHEET 1: HOW TO USE ---
+  const wsHow = wb.addWorksheet('HOW TO USE', { views: [{ showGridLines: false }] });
+  wsHow.columns = [{ width: 3 }, { width: 26 }, { width: 78 }];
+  wsHow.mergeCells('B2:C2');
+  wsHow.getCell('B2').value = `${company.name} — PROCUREMENT WORKBOOK GUIDE`;
+  wsHow.getCell('B2').font = { name: 'Calibri', size: 15, bold: true, color: { argb: theme.excel.headerFont } };
+  wsHow.getCell('B2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+  wsHow.getRow(2).height = 30;
+
+  const guideRows: [string, string][] = [
+    ['1. Single Entry Point', 'Enter items ONCE on PROFORMA INVOICE rows 17–36 (Requested Description, Offered Description, UoM, Qty). Never insert or sort rows on a single tab.'],
+    ['2. Internal Costing', 'Enter Supplier Unit Cost, Boxes, Box L/W/H (cm), and Kg/Box on PRICE CALC rows 17–36. Select active markup (10%, 15%, 18%, 20%) in PRICE CALC!E3.'],
+    ['3. Confirmed Formula Basis', 'Markup on cost: Unit Price = Supplier Cost * (1 + %). PRICE CALC Column R feeds PI Unit Price. VAT (PI!L5, default 5%, 0% for zero-rated) applies to goods subtotal ONLY.'],
+    ['4. Freight Calculation', 'Base Freight = MAX(Total CBM * Rate/CBM, Total Gross KG * Rate/KG). Documentation charge (default 10%) is added first, then selected markup % is applied. Shown as a separate line after VAT.'],
+    ['5. Sequential Numbering', 'Claim numbers exclusively from Master_Registry.xlsx (PREFIX-GG-SEQ-YEAR). Seeded at PI-GG-042-2026; next sequence is 43.'],
+    ['6. Issuing & Confidentiality', 'Export values-only .xlsx per document tab. NEVER send PRICE CALC or the master job workbook to customers.'],
+    ['7. End-User List (Updated)', 'CONTROLS!A2:A10 contains the confirmed 9-item list including Pharmecore (corrected from Pharmaco) and OTHER.'],
+  ];
+
+  guideRows.forEach(([title, desc], idx) => {
+    const r = 4 + idx;
+    wsHow.getRow(r).height = 30;
+    wsHow.getCell(r, 2).value = title;
+    wsHow.getCell(r, 2).font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.strongBorderColor } };
+    wsHow.getCell(r, 2).alignment = { vertical: 'middle' };
+    wsHow.getCell(r, 3).value = desc;
+    wsHow.getCell(r, 3).font = { name: 'Calibri', size: 10, color: { argb: 'FF1E293B' } };
+    wsHow.getCell(r, 3).alignment = { vertical: 'middle', wrapText: true };
+    wsHow.getCell(r, 2).border = { bottom: thinBorder(theme.excel.borderColor) };
+    wsHow.getCell(r, 3).border = { bottom: thinBorder(theme.excel.borderColor) };
+  });
+
+  // --- SHEET 2: PROFORMA INVOICE (Entry sheet, rows 17-36, Controls K:L, TO in C8, VAT in L5) ---
+  const wsPI = wb.addWorksheet('PROFORMA INVOICE', {
+    views: [{ showGridLines: false, state: 'frozen', ySplit: 16 }],
+    pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  wsPI.columns = [
+    { width: 2 },
+    { width: 6 },  // B: No.
+    { width: 28 }, // C: Requested Desc
+    { width: 32 }, // D: Offered Desc
+    { width: 9 },  // E: UoM
+    { width: 9 },  // F: Qty
+    { width: 15 }, // G: Unit Price
+    { width: 16 }, // H: Total Price
+    { width: 3 },  // I: Spacer
+    { width: 3 },  // J: Spacer
+    { width: 18 }, // K: Control Labels
+    { width: 22 }, // L: Control Inputs
+  ];
+
+  styleBannerHeader(wb, wsPI, theme, company, 'PROFORMA INVOICE', includeCurrentData && job.issuedDocs.PI ? job.issuedDocs.PI.docNumber : 'PI-GG-XXX-2026', 7);
+
+  wsPI.getCell('B8').value = 'TO (END USER):';
+  wsPI.getCell('B8').font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FF475569' } };
+  wsPI.getCell('C8').value = includeCurrentData ? job.controls.endUserSelect : company.endUsers[0] || 'AIAA (Asmara International Airport)';
+  wsPI.getCell('C8').font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.inputFont } };
+  const lastEndUserRow = Math.max(2, company.endUsers.length + 1);
+  wsPI.getCell('C8').dataValidation = {
+    type: 'list',
+    allowBlank: true,
+    formulae: [`CONTROLS!$A$2:$A$${lastEndUserRow}`],
+  };
+
+  wsPI.getCell('B9').value = 'CUSTOM NAME:';
+  wsPI.getCell('B9').font = { name: 'Calibri', size: 9, bold: true, color: { argb: 'FF64748B' } };
+  wsPI.getCell('C9').value = includeCurrentData ? job.controls.customEndUser : '';
+  wsPI.getCell('C9').font = { name: 'Calibri', size: 10, color: { argb: theme.excel.inputFont } };
+
+  wsPI.getCell('B10').value = 'RFQ REF:';
+  wsPI.getCell('C10').value = includeCurrentData ? job.controls.rfqRef : '';
+  wsPI.getCell('B11').value = 'CUSTOMER PO:';
+  wsPI.getCell('C11').value = includeCurrentData ? job.controls.customerPoRef : '';
+
+  // Controls block K2:L8 (PI!L5 = VAT%)
+  wsPI.getCell('K2').value = 'JOB CONTROLS';
+  wsPI.getCell('K2').font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.headerFont } };
+  wsPI.getCell('K2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.accentFill } };
+  wsPI.getCell('L2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.accentFill } };
+
+  const piControls: [number, string, string | number, string?][] = [
+    [3, 'Currency', includeCurrentData ? job.controls.currency : 'USD'],
+    [4, 'Incoterm', includeCurrentData ? job.controls.incoterm : 'CIF'],
+    [5, 'VAT Rate (PI!L5)', includeCurrentData ? job.controls.vatRate : 0.05, '0.##%'],
+    [6, 'Destination', includeCurrentData ? job.controls.destination : 'Massawa Seaport'],
+    [7, 'Payment Terms', includeCurrentData ? job.controls.paymentTerms : '50% Advance, 50% Pre-Ship'],
+  ];
+  piControls.forEach(([rowIdx, lbl, val, fmt]) => {
+    wsPI.getCell(rowIdx, 11).value = lbl;
+    wsPI.getCell(rowIdx, 11).font = { name: 'Calibri', size: 9, bold: true, color: { argb: 'FF475569' } };
+    wsPI.getCell(rowIdx, 12).value = val;
+    wsPI.getCell(rowIdx, 12).font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.inputFont } };
+    if (fmt) wsPI.getCell(rowIdx, 12).numFmt = fmt;
+    wsPI.getCell(rowIdx, 11).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.subHeaderFill } };
+    wsPI.getCell(rowIdx, 12).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.subHeaderFill } };
+    wsPI.getCell(rowIdx, 11).border = { bottom: thinBorder(theme.excel.borderColor) };
+    wsPI.getCell(rowIdx, 12).border = { bottom: thinBorder(theme.excel.borderColor) };
+  });
+
+  // Table header on Row 16 so items sit strictly on Rows 17-36
+  const piHeaders = ['No.', 'Requested Description', 'Offered Description', 'UoM', 'Qty', 'Unit Price', 'Total Price'];
+  wsPI.getRow(16).height = 25;
+  piHeaders.forEach((h, i) => {
+    const cell = wsPI.getCell(16, i + 2);
+    cell.value = h;
+    cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.headerFont } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+    cell.alignment = { vertical: 'middle', horizontal: i === 0 || i === 3 ? 'center' : i >= 4 ? 'right' : 'left' };
+  });
+
+  for (let i = 0; i < 20; i++) {
+    const r = 17 + i;
+    const item = includeCurrentData ? job.items[i] : null;
+    wsPI.getRow(r).height = 22;
+
+    wsPI.getCell(r, 2).value = { formula: `IF(AND(C${r}="",D${r}=""),"",${i + 1})` };
+    wsPI.getCell(r, 3).value = item ? item.requestedDescription : '';
+    wsPI.getCell(r, 4).value = item ? item.offeredDescription : '';
+    wsPI.getCell(r, 5).value = item ? item.uom : '';
+    wsPI.getCell(r, 6).value = item && item.qty !== null ? item.qty : null;
+    // Unit Price linked strictly from PRICE CALC Col R
+    wsPI.getCell(r, 7).value = { formula: `IF('PRICE CALC'!R${r}="","",'PRICE CALC'!R${r})` };
+    wsPI.getCell(r, 8).value = { formula: `IF(OR(F${r}="",G${r}=""),"",F${r}*G${r})` };
+
+    for (let c = 2; c <= 8; c++) {
+      const cell = wsPI.getCell(r, c);
+      const isInput = c >= 3 && c <= 6;
+      cell.font = {
+        name: 'Calibri',
+        size: 10,
+        color: { argb: isInput ? theme.excel.inputFont : theme.excel.formulaFont },
+      };
+      if (i % 2 === 1) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.zebraFill } };
+      }
+      cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+      cell.alignment = {
+        vertical: 'middle',
+        horizontal: c === 2 || c === 5 ? 'center' : c >= 6 ? 'right' : 'left',
+        wrapText: c === 3 || c === 4,
+      };
+    }
+    wsPI.getCell(r, 6).numFmt = '#,##0.##';
+    wsPI.getCell(r, 7).numFmt = '#,##0.00';
+    wsPI.getCell(r, 8).numFmt = '#,##0.00';
+  }
+
+  // PI Totals (Rows 38-41)
+  const piSummary: [number, string, string, boolean][] = [
+    [38, 'GOODS SUBTOTAL', 'SUM(H17:H36)', false],
+    [39, 'VAT (Goods Subtotal Only)', 'H38*L5', false],
+    [40, 'FREIGHT & DOCUMENTATION', "'PRICE CALC'!R41", false],
+    [41, 'GRAND TOTAL', 'H38+H39+H40', true],
+  ];
+  piSummary.forEach(([r, label, formula, isGrand]) => {
+    wsPI.getRow(r).height = isGrand ? 26 : 21;
+    wsPI.mergeCells(r, 5, r, 7);
+    wsPI.getCell(r, 5).value = label;
+    wsPI.getCell(r, 5).alignment = { horizontal: 'right', vertical: 'middle' };
+    wsPI.getCell(r, 8).value = { formula };
+    wsPI.getCell(r, 8).numFmt = '#,##0.00';
+    wsPI.getCell(r, 8).alignment = { horizontal: 'right', vertical: 'middle' };
+    for (let c = 5; c <= 8; c++) {
+      wsPI.getCell(r, c).font = { name: 'Calibri', size: isGrand ? 11 : 10, bold: isGrand, color: { argb: theme.excel.strongBorderColor } };
+      if (isGrand) {
+        wsPI.getCell(r, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.totalFill } };
+        wsPI.getCell(r, c).border = { top: thinBorder(theme.excel.strongBorderColor), bottom: mediumBorder(theme.excel.strongBorderColor) };
+      } else {
+        wsPI.getCell(r, c).border = { bottom: thinBorder(theme.excel.borderColor) };
+      }
+    }
+  });
+
+  // --- SHEET 3: PRICE CALC (INTERNAL ONLY, E3 = Markup %, Col R = Active Unit Price, R41 = Customer Freight) ---
+  const wsPC = wb.addWorksheet('PRICE CALC', {
+    views: [{ showGridLines: false, state: 'frozen', ySplit: 16 }],
+    pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  wsPC.columns = [
+    { width: 2 },  // A spacer
+    { width: 5 },  // B No
+    { width: 24 }, // C Offered Desc
+    { width: 7 },  // D Qty
+    { width: 12 }, // E Supplier Unit Cost (and E3 Markup %)
+    { width: 13 }, // F Supplier Total
+    { width: 8 },  // G Boxes
+    { width: 8 },  // H L cm
+    { width: 8 },  // I W cm
+    { width: 8 },  // J H cm
+    { width: 10 }, // K CBM
+    { width: 9 },  // L Kg/Box
+    { width: 11 }, // M Gross KG
+    { width: 12 }, // N 10% Price
+    { width: 12 }, // O 15% Price
+    { width: 12 }, // P 18% Price
+    { width: 12 }, // Q 20% Price
+    { width: 14 }, // R ACTIVE UNIT PRICE (Feeds PI!)
+  ];
+
+  wsPC.mergeCells('B2:R2');
+  wsPC.getCell('B2').value = 'PRICE CALC — INTERNAL COSTING & MARKUP SCENARIOS (CONFIDENTIAL — DO NOT SEND TO CUSTOMER)';
+  wsPC.getCell('B2').font = { name: 'Calibri', size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+  wsPC.getCell('B2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF991B1B' } };
+  wsPC.getCell('B2').alignment = { vertical: 'middle', indent: 1 };
+  wsPC.getRow(2).height = 28;
+
+  // Controls Row 3: E3 = Selected Markup %, J3 = Rate/CBM, L3 = Rate/KG, N3 = Doc Charge %
+  wsPC.getRow(3).height = 22;
+  wsPC.getCell('B3').value = 'ACTIVE MARKUP (E3):';
+  wsPC.mergeCells('B3:D3');
+  wsPC.getCell('B3').font = { name: 'Calibri', size: 10, bold: true };
+  wsPC.getCell('E3').value = includeCurrentData ? job.freight.selectedMarkupPct : 0.15;
+  wsPC.getCell('E3').numFmt = '0.##%';
+  wsPC.getCell('E3').font = { name: 'Calibri', size: 11, bold: true, color: { argb: theme.excel.inputFont } };
+  wsPC.getCell('E3').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+
+  wsPC.getCell('H3').value = 'Rate/CBM:';
+  wsPC.getCell('I3').value = includeCurrentData ? job.freight.ratePerCbm : 185;
+  wsPC.getCell('I3').numFmt = '#,##0.00';
+  wsPC.getCell('I3').font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.inputFont } };
+
+  wsPC.getCell('K3').value = 'Rate/KG:';
+  wsPC.getCell('L3').value = includeCurrentData ? job.freight.ratePerKg : 2.4;
+  wsPC.getCell('L3').numFmt = '#,##0.00';
+  wsPC.getCell('L3').font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.inputFont } };
+
+  wsPC.getCell('N3').value = 'Doc Fee %:';
+  wsPC.getCell('O3').value = includeCurrentData ? job.freight.docChargePct : 0.1;
+  wsPC.getCell('O3').numFmt = '0.##%';
+  wsPC.getCell('O3').font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.inputFont } };
+
+  const pcHeaders = [
+    'No.', 'Offered Description', 'Qty', 'Supplier Cost', 'Supplier Total',
+    'Boxes', 'L (cm)', 'W (cm)', 'H (cm)', 'CBM', 'Kg/Box', 'Gross KG',
+    '10% Price', '15% Price', '18% Price', '20% Price', 'Active Unit Price (R)',
+  ];
+  wsPC.getRow(16).height = 28;
+  pcHeaders.forEach((h, i) => {
+    const cell = wsPC.getCell(16, i + 2);
+    cell.value = h;
+    cell.font = { name: 'Calibri', size: 9, bold: true, color: { argb: theme.excel.headerFont } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: i === 16 ? theme.excel.accentFill : theme.excel.headerFill } };
+    cell.alignment = { vertical: 'middle', horizontal: i <= 1 ? 'left' : 'right', wrapText: true };
+  });
+
+  for (let i = 0; i < 20; i++) {
+    const r = 17 + i;
+    const item = includeCurrentData ? job.items[i] : null;
+    wsPC.getRow(r).height = 22;
+
+    wsPC.getCell(r, 2).value = { formula: `IF('PROFORMA INVOICE'!B${r}="","",'PROFORMA INVOICE'!B${r})` };
+    wsPC.getCell(r, 3).value = { formula: `IF('PROFORMA INVOICE'!D${r}="","",'PROFORMA INVOICE'!D${r})` };
+    wsPC.getCell(r, 4).value = { formula: `IF('PROFORMA INVOICE'!F${r}="","",'PROFORMA INVOICE'!F${r})` };
+    wsPC.getCell(r, 5).value = item && item.supplierUnitCost !== null ? item.supplierUnitCost : null;
+    wsPC.getCell(r, 6).value = { formula: `IF(OR(D${r}="",E${r}=""),"",D${r}*E${r})` };
+    wsPC.getCell(r, 7).value = item && item.boxes !== null ? item.boxes : null;
+    wsPC.getCell(r, 8).value = item && item.boxLengthCm !== null ? item.boxLengthCm : null;
+    wsPC.getCell(r, 9).value = item && item.boxWidthCm !== null ? item.boxWidthCm : null;
+    wsPC.getCell(r, 10).value = item && item.boxHeightCm !== null ? item.boxHeightCm : null;
+    wsPC.getCell(r, 11).value = { formula: `IF(OR(G${r}="",H${r}="",I${r}="",J${r}=""),"",(G${r}*H${r}*I${r}*J${r})/1000000)` };
+    wsPC.getCell(r, 12).value = item && item.kgPerBox !== null ? item.kgPerBox : null;
+    wsPC.getCell(r, 13).value = { formula: `IF(OR(G${r}="",L${r}=""),"",G${r}*L${r})` };
+    // Markup on cost: cost * (1 + %)
+    wsPC.getCell(r, 14).value = { formula: `IF(E${r}="","",ROUND(E${r}*1.10,2))` };
+    wsPC.getCell(r, 15).value = { formula: `IF(E${r}="","",ROUND(E${r}*1.15,2))` };
+    wsPC.getCell(r, 16).value = { formula: `IF(E${r}="","",ROUND(E${r}*1.18,2))` };
+    wsPC.getCell(r, 17).value = { formula: `IF(E${r}="","",ROUND(E${r}*1.20,2))` };
+    wsPC.getCell(r, 18).value = { formula: `IF(E${r}="","",ROUND(E${r}*(1+$E$3),2))` };
+
+    for (let c = 2; c <= 18; c++) {
+      const cell = wsPC.getCell(r, c);
+      const isInput = c === 5 || (c >= 7 && c <= 10) || c === 12;
+      cell.font = {
+        name: 'Calibri',
+        size: 9,
+        bold: c === 18,
+        color: { argb: isInput ? theme.excel.inputFont : theme.excel.formulaFont },
+      };
+      if (c === 18) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.subHeaderFill } };
+      } else if (i % 2 === 1) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.zebraFill } };
+      }
+      cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+      cell.alignment = { vertical: 'middle', horizontal: c <= 3 ? 'left' : 'right' };
+    }
+    [5, 6, 12, 13, 14, 15, 16, 17, 18].forEach((c) => (wsPC.getCell(r, c).numFmt = '#,##0.00'));
+    wsPC.getCell(r, 11).numFmt = '0.0000';
+  }
+
+  // Freight Summary Block on PRICE CALC rows 38-41 (R41 feeds PI!H40)
+  wsPC.getCell('F37').value = { formula: 'SUM(F17:F36)' };
+  wsPC.getCell('F37').numFmt = '#,##0.00';
+  wsPC.getCell('K37').value = { formula: 'SUM(K17:K36)' };
+  wsPC.getCell('K37').numFmt = '0.0000';
+  wsPC.getCell('M37').value = { formula: 'SUM(M17:M36)' };
+  wsPC.getCell('M37').numFmt = '#,##0.00';
+
+  const freightRows: [number, string, string][] = [
+    [38, 'Base Freight = MAX(CBM*Rate, KG*Rate)', 'MAX(K37*I3, M37*L3)'],
+    [39, 'Documentation Charge (Default 10%)', 'R38*O3'],
+    [40, 'Freight + Doc Charge Subtotal', 'R38+R39'],
+    [41, 'Customer Freight (With Selected Markup E3)', 'ROUND(R40*(1+E3),2)'],
+  ];
+  freightRows.forEach(([r, lbl, formula]) => {
+    wsPC.getRow(r).height = 22;
+    wsPC.mergeCells(r, 14, r, 17);
+    wsPC.getCell(r, 14).value = lbl;
+    wsPC.getCell(r, 14).alignment = { horizontal: 'right', vertical: 'middle' };
+    wsPC.getCell(r, 14).font = { name: 'Calibri', size: 9, bold: r === 41 };
+    wsPC.getCell(r, 18).value = { formula };
+    wsPC.getCell(r, 18).numFmt = '#,##0.00';
+    wsPC.getCell(r, 18).font = { name: 'Calibri', size: 10, bold: r === 41, color: { argb: theme.excel.strongBorderColor } };
+    if (r === 41) {
+      wsPC.getCell(r, 18).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.totalFill } };
+    }
+  });
+
+  // Append any custom columns dynamically to PI (after Total Price so core cols B..H + L5 + PRICE CALC stay 100% intact)
+  const templateCustomCols = includeCurrentData ? job.customColumns || [] : [];
+  if (templateCustomCols.length > 0) {
+    templateCustomCols.forEach((cc, cIdx) => {
+      const colNum = 14 + cIdx; // Col N onwards on PI (right of K:L controls)
+      wsPI.getColumn(colNum).width = 16;
+      const hdr = wsPI.getCell(16, colNum);
+      hdr.value = cc.label;
+      hdr.font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.headerFont } };
+      hdr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.accentFill } };
+      hdr.alignment = { vertical: 'middle', horizontal: 'left' };
+      for (let i = 0; i < 20; i++) {
+        const r = 17 + i;
+        const val = job.items[i]?.customFields?.[cc.id] || '';
+        const cell = wsPI.getCell(r, colNum);
+        cell.value = val;
+        cell.font = { name: 'Calibri', size: 10, color: { argb: theme.excel.inputFont } };
+        if (i % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.zebraFill } };
+        cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+      }
+    });
+  }
+
+  // Map each custom column ID to its fixed storage letter on PROFORMA INVOICE (Col N+)
+  const customPiColLetter = new Map<string, string>();
+  templateCustomCols.forEach((cc, cIdx) => {
+    customPiColLetter.set(cc.id, colToLetter(14 + cIdx));
+  });
+
+  // --- SHEETS 4..8: QUOTATION, SUPPLIER PO, PACKING LIST, DELIVERY NOTE, COMMERCIAL INVOICE ---
+  const downstreamDocs: DocPrefix[] = ['QT', 'PO', 'PL', 'DN', 'CI'];
+  for (const prefix of downstreamDocs) {
+    const meta = DOC_META[prefix];
+    const isLogistics = prefix === 'PL' || prefix === 'DN';
+    const isPO = prefix === 'PO';
+    const extraCount = templateCustomCols.length;
+    const ws = wb.addWorksheet(meta.sheetName, {
+      views: [{ showGridLines: false, state: 'frozen', ySplit: 16 }],
+      pageSetup: { paperSize: 9, orientation: isLogistics || extraCount > 0 ? 'landscape' : 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+    });
+
+    interface DsColSpec {
+      key: string;
+      header: string;
+      width: number;
+      align: 'left' | 'center' | 'right';
+      isInput?: boolean;
+      numFmt?: string;
+      piCustomLetter?: string;
+    }
+
+    const dsCustom = (pos: CustomColumnPosition): DsColSpec[] =>
+      filterCustomCols(templateCustomCols, pos).map((cc) => ({
+        key: `custom:${cc.id}`,
+        header: cc.label,
+        width: 16,
+        align: 'left',
+        piCustomLetter: customPiColLetter.get(cc.id),
+      }));
+
+    const dsSpecs: DsColSpec[] = [
+      { key: 'no', header: 'No.', width: 6, align: 'center' },
+      ...dsCustom('after_no'),
+      { key: 'requested', header: 'Requested Description', width: isLogistics ? 26 : 28, align: 'left' },
+      ...dsCustom('after_requested'),
+      { key: 'offered', header: 'Offered Description', width: isLogistics ? 30 : 32, align: 'left' },
+      ...dsCustom('after_offered'),
+      { key: 'uom', header: 'UoM', width: isLogistics ? 8 : 9, align: 'center' },
+      { key: 'qty', header: 'Qty', width: isLogistics ? 8 : 9, align: 'right' },
+      ...dsCustom('after_qty'),
+      ...(isLogistics
+        ? ([
+            { key: 'carton', header: 'Carton No.', width: 15, align: 'center', isInput: true },
+            { key: 'netWt', header: 'Net Wt (KG)', width: 14, align: 'right', isInput: true, numFmt: '#,##0.00' },
+            { key: 'grossWt', header: 'Gross Wt (KG)', width: 14, align: 'right', isInput: true, numFmt: '#,##0.00' },
+          ] as DsColSpec[])
+        : isPO
+        ? ([
+            { key: 'price', header: 'Unit Cost', width: 15, align: 'right', numFmt: '#,##0.00' },
+            { key: 'total', header: 'Total Cost', width: 16, align: 'right', numFmt: '#,##0.00' },
+          ] as DsColSpec[])
+        : ([
+            { key: 'price', header: 'Unit Price', width: 15, align: 'right', numFmt: '#,##0.00' },
+            { key: 'total', header: 'Total Price', width: 16, align: 'right', numFmt: '#,##0.00' },
+          ] as DsColSpec[])),
+      ...dsCustom('end'),
+    ];
+
+    ws.columns = [{ width: 2 }, ...dsSpecs.map((s) => ({ width: s.width }))];
+
+    const docNo = includeCurrentData && job.issuedDocs[prefix] ? job.issuedDocs[prefix]!.docNumber : `${prefix}-GG-XXX-2026`;
+    styleBannerHeader(wb, ws, theme, company, meta.title, docNo, dsSpecs.length);
+
+    ws.getCell('B8').value = meta.recipientLabel;
+    ws.getCell('B8').font = { name: 'Calibri', size: 9, bold: true, color: { argb: 'FF64748B' } };
+    ws.getCell('C8').value = isPO
+      ? includeCurrentData ? job.controls.supplierName : ''
+      : { formula: `IF('PROFORMA INVOICE'!C8="OTHER",'PROFORMA INVOICE'!C9,'PROFORMA INVOICE'!C8)` };
+    ws.getCell('C8').font = { name: 'Calibri', size: 10, bold: true };
+
+    const dsColNum = (key: string) => dsSpecs.findIndex((s) => s.key === key) + 2;
+    const qtyCol = dsColNum('qty');
+    const priceCol = dsColNum('price');
+    const totalCol = dsColNum('total');
+    const qtyLet = colToLetter(qtyCol);
+    const priceLet = priceCol >= 2 ? colToLetter(priceCol) : '';
+    const totalLet = totalCol >= 2 ? colToLetter(totalCol) : '';
+
+    ws.getRow(16).height = 25;
+    dsSpecs.forEach((spec, i) => {
+      const cell = ws.getCell(16, i + 2);
+      cell.value = spec.header;
+      cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.headerFont } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+      cell.alignment = { vertical: 'middle', horizontal: spec.align };
+    });
+
+    for (let i = 0; i < 20; i++) {
+      const r = 17 + i;
+      const item = includeCurrentData ? job.items[i] : null;
+      ws.getRow(r).height = 22;
+
+      dsSpecs.forEach((spec, idx) => {
+        const c = idx + 2;
+        const cell = ws.getCell(r, c);
+        if (spec.key === 'no') {
+          cell.value = { formula: `IF('PROFORMA INVOICE'!B${r}="","",'PROFORMA INVOICE'!B${r})` };
+        } else if (spec.piCustomLetter) {
+          cell.value = {
+            formula: `IF('PROFORMA INVOICE'!${spec.piCustomLetter}${r}="","",'PROFORMA INVOICE'!${spec.piCustomLetter}${r})`,
+          };
+        } else if (spec.key === 'requested') {
+          cell.value = { formula: `IF('PROFORMA INVOICE'!C${r}="","",'PROFORMA INVOICE'!C${r})` };
+        } else if (spec.key === 'offered') {
+          cell.value = { formula: `IF('PROFORMA INVOICE'!D${r}="","",'PROFORMA INVOICE'!D${r})` };
+        } else if (spec.key === 'uom') {
+          cell.value = { formula: `IF('PROFORMA INVOICE'!E${r}="","",'PROFORMA INVOICE'!E${r})` };
+        } else if (spec.key === 'qty') {
+          cell.value = { formula: `IF('PROFORMA INVOICE'!F${r}="","",'PROFORMA INVOICE'!F${r})` };
+        } else if (spec.key === 'carton') {
+          cell.value = item ? item.cartonNo : '';
+        } else if (spec.key === 'netWt') {
+          cell.value = item && item.netWtKg !== null ? item.netWtKg : null;
+        } else if (spec.key === 'grossWt') {
+          cell.value = item && item.grossWtKg !== null ? item.grossWtKg : null;
+        } else if (spec.key === 'price') {
+          cell.value = isPO
+            ? { formula: `IF('PRICE CALC'!E${r}="","",'PRICE CALC'!E${r})` }
+            : { formula: `IF('PROFORMA INVOICE'!G${r}="","",'PROFORMA INVOICE'!G${r})` };
+        } else if (spec.key === 'total') {
+          cell.value = { formula: `IF(OR(${qtyLet}${r}="",${priceLet}${r}=""),"",${qtyLet}${r}*${priceLet}${r})` };
+        }
+
+        if (spec.numFmt) cell.numFmt = spec.numFmt;
+        cell.font = {
+          name: 'Calibri',
+          size: 10,
+          color: { argb: spec.isInput ? theme.excel.inputFont : theme.excel.formulaFont },
+        };
+        if (i % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.zebraFill } };
+        cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+        cell.alignment = { vertical: 'middle', horizontal: spec.align };
+      });
+    }
+
+    if (!isLogistics && !isPO) {
+      ws.getCell(38, priceCol).value = 'SUBTOTAL';
+      ws.getCell(38, totalCol).value = { formula: `SUM(${totalLet}17:${totalLet}36)` };
+      ws.getCell(39, priceCol).value = 'VAT';
+      ws.getCell(39, totalCol).value = { formula: `${totalLet}38*'PROFORMA INVOICE'!L5` };
+      ws.getCell(40, priceCol).value = 'FREIGHT';
+      ws.getCell(40, totalCol).value = { formula: "'PROFORMA INVOICE'!H40" };
+      ws.getCell(41, priceCol).value = 'GRAND TOTAL';
+      ws.getCell(41, totalCol).value = { formula: `${totalLet}38+${totalLet}39+${totalLet}40` };
+      [38, 39, 40, 41].forEach((r) => {
+        ws.getCell(r, totalCol).numFmt = '#,##0.00';
+        ws.getCell(r, priceCol).font = { name: 'Calibri', size: 10, bold: r === 41 };
+        ws.getCell(r, totalCol).font = { name: 'Calibri', size: 10, bold: r === 41 };
+      });
+    } else if (isPO) {
+      ws.getCell(38, priceCol).value = 'TOTAL PO COST';
+      ws.getCell(38, totalCol).value = { formula: `SUM(${totalLet}17:${totalLet}36)` };
+      ws.getCell(38, totalCol).numFmt = '#,##0.00';
+      ws.getCell(38, priceCol).font = { name: 'Calibri', size: 10, bold: true };
+      ws.getCell(38, totalCol).font = { name: 'Calibri', size: 10, bold: true };
+    }
+  }
+
+  // --- SHEET 9: CONTROLS (Fixed 9-name list with Pharmecore + Server path settings) ---
+  const wsCtrl = wb.addWorksheet('CONTROLS', { views: [{ showGridLines: true }] });
+  wsCtrl.columns = [{ width: 38 }, { width: 4 }, { width: 24 }, { width: 44 }];
+  wsCtrl.getCell('A1').value = `END USERS (${company.endUsers.length}-ITEM LIST)`;
+  wsCtrl.getCell('A1').font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.headerFont } };
+  wsCtrl.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+  company.endUsers.forEach((u, idx) => {
+    wsCtrl.getCell(2 + idx, 1).value = u;
+  });
+
+  wsCtrl.getCell('C1').value = 'SETTING';
+  wsCtrl.getCell('D1').value = 'VALUE';
+  wsCtrl.getCell('C1').font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.headerFont } };
+  wsCtrl.getCell('D1').font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.headerFont } };
+  wsCtrl.getCell('C1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+  wsCtrl.getCell('D1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+
+  wsCtrl.getCell('C2').value = 'ctl_RegistryPath';
+  wsCtrl.getCell('D2').value = '\\\\Server\\Procurement\\Registry\\Master_Registry.xlsx';
+  wsCtrl.getCell('C3').value = 'ctl_IssuedFolder';
+  wsCtrl.getCell('D3').value = '\\\\Server\\Procurement\\Issued\\';
+  wsCtrl.getCell('C4').value = 'Style Variant';
+  wsCtrl.getCell('D4').value = theme.name;
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const filename = includeCurrentData
+    ? `GG_Job_${job.jobName.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 28)}_${theme.id}.xlsx`
+    : `GG_Job_Template_${theme.id}.xlsx`;
+  await triggerDownload(buffer as ArrayBuffer, filename);
+  return filename;
+}
+
+/**
+ * 3. MASTER_REGISTRY.XLSX EXPORT (REGISTRY + PREFIXES sheets)
+ */
+export async function exportMasterRegistryXlsx(
+  entries: RegistryEntry[],
+  themeId: ThemeVariantId,
+  company: CompanyProfile
+): Promise<string> {
+  const theme = EXCEL_THEMES[themeId];
+  const wb = new ExcelJS.Workbook();
+  wb.creator = company.name;
+  wb.created = new Date();
+
+  const ws = wb.addWorksheet('REGISTRY', {
+    views: [{ showGridLines: false, state: 'frozen', ySplit: 4 }],
+    pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+
+  ws.columns = [
+    { width: 2 },
+    { width: 10 }, // Seq
+    { width: 18 }, // Document No
+    { width: 10 }, // Prefix
+    { width: 26 }, // Customer / Supplier
+    { width: 28 }, // Job Reference
+    { width: 10 }, // Currency
+    { width: 16 }, // Amount
+    { width: 18 }, // Issued By
+    { width: 18 }, // Issued Date
+    { width: 12 }, // Status
+  ];
+
+  ws.mergeCells('B2:K2');
+  ws.getCell('B2').value = `${company.name} — MASTER DOCUMENT REGISTRY`;
+  ws.getCell('B2').font = { name: 'Calibri', size: 14, bold: true, color: { argb: theme.excel.headerFont } };
+  ws.getCell('B2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+  ws.getCell('B2').alignment = { vertical: 'middle', indent: 1 };
+  ws.getRow(2).height = 28;
+
+  const cols = ['Seq', 'Document No.', 'Prefix', 'Customer / Party', 'Job Reference', 'Currency', 'Amount', 'Issued By', 'Date', 'Status'];
+  ws.getRow(4).height = 24;
+  cols.forEach((h, i) => {
+    const cell = ws.getCell(4, i + 2);
+    cell.value = h;
+    cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.headerFont } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.accentFill } };
+    cell.alignment = { vertical: 'middle', horizontal: i === 0 || i === 2 || i === 5 || i === 9 ? 'center' : i === 6 ? 'right' : 'left' };
+  });
+
+  const sorted = [...entries].sort((a, b) => a.sequence - b.sequence);
+  sorted.forEach((entry, idx) => {
+    const r = 5 + idx;
+    ws.getRow(r).height = 22;
+    const vals = [
+      entry.sequence,
+      entry.docNumber,
+      entry.prefix,
+      entry.customer,
+      entry.jobName,
+      entry.currency,
+      entry.amount,
+      entry.issuedBy,
+      entry.issuedAt.slice(0, 10),
+      entry.status,
+    ];
+    vals.forEach((v, cIdx) => {
+      const cell = ws.getCell(r, cIdx + 2);
+      cell.value = v;
+      cell.font = {
+        name: 'Calibri',
+        size: 10,
+        bold: cIdx === 1 || cIdx === 9,
+        color: { argb: entry.status === 'VOID' ? 'FFDC2626' : 'FF0F172A' },
+      };
+      if (idx % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.zebraFill } };
+      cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+      cell.alignment = {
+        vertical: 'middle',
+        horizontal: cIdx === 0 || cIdx === 2 || cIdx === 5 || cIdx === 9 ? 'center' : cIdx === 6 ? 'right' : 'left',
+      };
+      if (cIdx === 6) cell.numFmt = '#,##0.00';
+    });
+  });
+
+  // PREFIXES sheet
+  const wsPref = wb.addWorksheet('PREFIXES');
+  wsPref.columns = [{ width: 12 }, { width: 28 }, { width: 42 }];
+  wsPref.getRow(1).values = ['Prefix', 'Document Type', 'Format'];
+  wsPref.getRow(1).font = { bold: true };
+  (['PI', 'QT', 'PO', 'CI', 'PL', 'DN'] as DocPrefix[]).forEach((p, idx) => {
+    wsPref.getRow(2 + idx).values = [p, DOC_META[p].title, `${p}-GG-SEQ-YEAR`];
+  });
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const filename = 'Master_Registry.xlsx';
+  await triggerDownload(buffer as ArrayBuffer, filename);
+  return filename;
+}
+
+/**
+ * 4. IMPORT / OPEN .XLSX DIRECTLY INSIDE THE APP
+ * Supports loading either a Grand Group Job workbook (PROFORMA INVOICE + PRICE CALC + PL/DN)
+ * OR a Master_Registry.xlsx file to synchronize sequence numbers offline.
+ */
+function cellToString(val: ExcelJS.CellValue): string {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'object') {
+    if ('result' in val && val.result !== undefined && val.result !== null) {
+      return String(val.result).trim();
+    }
+    if ('richText' in val && Array.isArray(val.richText)) {
+      return val.richText.map((t) => t.text).join('').trim();
+    }
+    if ('text' in val && typeof val.text === 'string') {
+      return val.text.trim();
+    }
+    return '';
+  }
+  return String(val).trim();
+}
+
+function cellToNumber(val: ExcelJS.CellValue): number | null {
+  if (val === null || val === undefined || val === '') return null;
+  if (typeof val === 'number') return Number.isNaN(val) ? null : val;
+  if (typeof val === 'object' && 'result' in val) {
+    const res = val.result;
+    if (typeof res === 'number' && !Number.isNaN(res)) return res;
+    if (typeof res === 'string' && res.trim() !== '') {
+      const n = Number(res.replace(/,/g, ''));
+      return Number.isNaN(n) ? null : n;
+    }
+    return null;
+  }
+  const n = Number(String(val).replace(/,/g, '').trim());
+  return Number.isNaN(n) ? null : n;
+}
+
+export type WorkbookImportResult =
+  | { kind: 'registry'; entries: RegistryEntry[]; importedCount: number }
+  | { kind: 'job'; job: ProcurementJob; itemCount: number }
+  | { kind: 'supplier_quote'; quote: ParsedSupplierQuote };
+
+export async function importWorkbookFromXlsx(file: File): Promise<WorkbookImportResult> {
+  const buffer = await file.arrayBuffer();
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer);
+
+  // 1. Check if it's a Master_Registry workbook
+  const regSheet = wb.getWorksheet('REGISTRY');
+  if (regSheet && !wb.getWorksheet('PROFORMA INVOICE')) {
+    const entries: RegistryEntry[] = [];
+    regSheet.eachRow((row, rowIdx) => {
+      if (rowIdx < 5) return;
+      const seq = cellToNumber(row.getCell(2).value);
+      const docNo = cellToString(row.getCell(3).value);
+      const prefix = cellToString(row.getCell(4).value).toUpperCase() as DocPrefix;
+      if (seq && docNo && ['PI', 'QT', 'PO', 'CI', 'PL', 'DN'].includes(prefix)) {
+        const statusRaw = cellToString(row.getCell(11).value).toUpperCase();
+        entries.push({
+          sequence: Math.floor(seq),
+          docNumber: docNo,
+          prefix,
+          year: Number(docNo.split('-').pop()) || new Date().getFullYear(),
+          jobId: `imported-${seq}`,
+          jobName: cellToString(row.getCell(6).value) || 'Imported Registry Entry',
+          customer: cellToString(row.getCell(5).value) || '—',
+          currency: cellToString(row.getCell(7).value) || 'USD',
+          amount: cellToNumber(row.getCell(8).value) ?? 0,
+          issuedBy: cellToString(row.getCell(9).value) || 'Excel Import',
+          issuedAt: cellToString(row.getCell(10).value) || new Date().toISOString().slice(0, 10),
+          status: statusRaw === 'VOID' ? 'VOID' : 'ISSUED',
+        });
+      }
+    });
+    if (entries.length > 0) {
+      return { kind: 'registry', entries, importedCount: entries.length };
+    }
+  }
+
+  // 2. If this workbook is NOT a Grand Group template, parse it as an any-format Supplier Quote!
+  const wsPI = wb.getWorksheet('PROFORMA INVOICE');
+  const wsPC = wb.getWorksheet('PRICE CALC');
+  const wsPL = wb.getWorksheet('PACKING LIST');
+
+  if (!wsPI && !wsPC) {
+    const quote = parseGenericSupplierXlsx(wb, file.name);
+    return { kind: 'supplier_quote', quote };
+  }
+
+  // 3. Parse as a Grand Group Job workbook
+  const cleanName = file.name.replace(/\.xlsx?$/i, '').replace(/[_-]+/g, ' ');
+  const job = createBlankJob(cleanName);
+
+  if (wsPI) {
+    // Try standard Grand Group template cells first
+    const toVal = cellToString(wsPI.getCell('C8').value);
+    if (toVal) {
+      if (END_USER_OPTIONS.includes(toVal)) {
+        job.controls.endUserSelect = toVal;
+      } else {
+        job.controls.endUserSelect = 'OTHER';
+        job.controls.customEndUser = toVal;
+      }
+    }
+    const customName = cellToString(wsPI.getCell('C9').value);
+    if (customName && job.controls.endUserSelect === 'OTHER') {
+      job.controls.customEndUser = customName;
+    }
+
+    const curr = cellToString(wsPI.getCell('L3').value);
+    if (curr) job.controls.currency = curr;
+    const inco = cellToString(wsPI.getCell('L4').value);
+    if (inco) job.controls.incoterm = inco;
+    const vat = cellToNumber(wsPI.getCell('L5').value);
+    if (vat !== null && vat >= 0 && vat <= 1) job.controls.vatRate = vat;
+    const dest = cellToString(wsPI.getCell('L6').value);
+    if (dest) job.controls.destination = dest;
+
+    // Parse rows 17..36 (standard template rows)
+    let foundRows = 0;
+    for (let i = 0; i < 20; i++) {
+      const r = 17 + i;
+      const reqDesc = cellToString(wsPI.getCell(r, 3).value);
+      const offDesc = cellToString(wsPI.getCell(r, 4).value);
+      const uom = cellToString(wsPI.getCell(r, 5).value);
+      const qty = cellToNumber(wsPI.getCell(r, 6).value);
+
+      if (reqDesc || offDesc || qty !== null) {
+        foundRows += 1;
+        job.items[i] = {
+          ...job.items[i],
+          requestedDescription: reqDesc,
+          offeredDescription: offDesc || reqDesc,
+          uom: uom || 'PCS',
+          qty,
+        };
+      }
+    }
+
+    // Fallback: if workbook is an issued values-only export (items start at row 12)
+    if (foundRows === 0) {
+      for (let i = 0; i < 20; i++) {
+        const r = 12 + i;
+        const reqDesc = cellToString(wsPI.getCell(r, 3).value);
+        const offDesc = cellToString(wsPI.getCell(r, 4).value);
+        const uom = cellToString(wsPI.getCell(r, 5).value);
+        const qty = cellToNumber(wsPI.getCell(r, 6).value);
+        const price = cellToNumber(wsPI.getCell(r, 7).value);
+        if ((reqDesc || offDesc) && qty !== null && qty > 0) {
+          foundRows += 1;
+          job.items[i] = {
+            ...job.items[i],
+            requestedDescription: reqDesc,
+            offeredDescription: offDesc || reqDesc,
+            uom: uom || 'PCS',
+            qty,
+            supplierUnitCost: price !== null ? Number((price / 1.15).toFixed(2)) : null,
+          };
+        }
+      }
+    }
+    // Read any custom columns stored in Col N+ (colNum 14..17) on template PI
+    const importedCustomCols: CustomColumnDef[] = [];
+    for (let cNum = 14; cNum <= 17; cNum++) {
+      const hdr = cellToString(wsPI.getCell(16, cNum).value);
+      if (hdr) {
+        const id = `col_${hdr.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_${cNum}`;
+        importedCustomCols.push({ id, label: hdr, position: 'after_no' });
+        for (let i = 0; i < 20; i++) {
+          const val = cellToString(wsPI.getCell(17 + i, cNum).value);
+          if (val) {
+            job.items[i] = {
+              ...job.items[i],
+              customFields: { ...(job.items[i].customFields || {}), [id]: val },
+            };
+          }
+        }
+      }
+    }
+    if (importedCustomCols.length > 0) {
+      job.customColumns = importedCustomCols;
+    }
+  }
+
+  if (wsPC) {
+    const e3 = cellToNumber(wsPC.getCell('E3').value);
+    if (e3 !== null && e3 >= 0 && e3 <= 5) {
+      job.freight.selectedMarkupPct = e3;
+    }
+    const rateCbm = cellToNumber(wsPC.getCell('I3').value);
+    if (rateCbm !== null) job.freight.ratePerCbm = rateCbm;
+    const rateKg = cellToNumber(wsPC.getCell('L3').value);
+    if (rateKg !== null) job.freight.ratePerKg = rateKg;
+    const docPct = cellToNumber(wsPC.getCell('O3').value);
+    if (docPct !== null && docPct >= 0 && docPct <= 1) job.freight.docChargePct = docPct;
+
+    for (let i = 0; i < 20; i++) {
+      const r = 17 + i;
+      const cost = cellToNumber(wsPC.getCell(r, 5).value);
+      const boxes = cellToNumber(wsPC.getCell(r, 7).value);
+      const l = cellToNumber(wsPC.getCell(r, 8).value);
+      const w = cellToNumber(wsPC.getCell(r, 9).value);
+      const h = cellToNumber(wsPC.getCell(r, 10).value);
+      const kg = cellToNumber(wsPC.getCell(r, 12).value);
+
+      const updates: Partial<JobItemRow> = {};
+      if (cost !== null) updates.supplierUnitCost = cost;
+      if (boxes !== null) updates.boxes = boxes;
+      if (l !== null) updates.boxLengthCm = l;
+      if (w !== null) updates.boxWidthCm = w;
+      if (h !== null) updates.boxHeightCm = h;
+      if (kg !== null) updates.kgPerBox = kg;
+      if (Object.keys(updates).length > 0) {
+        job.items[i] = { ...job.items[i], ...updates };
+      }
+    }
+  }
+
+  if (wsPL) {
+    for (let i = 0; i < 20; i++) {
+      const r = 17 + i;
+      const carton = cellToString(wsPL.getCell(r, 7).value);
+      const net = cellToNumber(wsPL.getCell(r, 8).value);
+      const gross = cellToNumber(wsPL.getCell(r, 9).value);
+      if (carton || net !== null || gross !== null) {
+        job.items[i] = {
+          ...job.items[i],
+          cartonNo: carton,
+          netWtKg: net,
+          grossWtKg: gross,
+        };
+      }
+    }
+  }
+
+  const itemCount = job.items.filter(
+    (it) => it.requestedDescription.trim() || it.offeredDescription.trim() || (it.qty ?? 0) > 0
+  ).length;
+
+  return { kind: 'job', job, itemCount };
+}
