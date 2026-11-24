@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { useRowSelection } from '../hooks/useRowSelection';
 import { ArrowRight, Building2, Lock } from 'lucide-react';
 import { MARKUP_RATES } from '../constants/themes';
 import {
@@ -66,6 +67,12 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
   };
   const guardControls = (patch: Partial<JobControls>) => {
     if (!isIssued) onUpdateControls(patch);
+  };
+  const rowSel = useRowSelection<number>();
+  const [bulkCost, setBulkCost] = useState('');
+  const selectableRows = calc.rows.filter((r) => !r.isEmpty).map((r) => r.rowNumber);
+  const applyBulk = (patch: Partial<JobItemRow>) => {
+    rowSel.selected.forEach((rn) => guardItem(rn, patch));
   };
   const supName = job.supplierQuote?.supplierName || job.controls.supplierName;
   const supRef = job.supplierQuote?.supplierQuoteRef || job.controls.supplierRef;
@@ -486,10 +493,63 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
             </div>
           </div>
 
+          {rowSel.count > 0 && (
+            <div className="no-print flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+              <span className="font-semibold text-slate-900">{rowSel.count} row{rowSel.count === 1 ? '' : 's'} selected</span>
+              <span className="text-slate-300">|</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={bulkCost}
+                onChange={(e) => setBulkCost(e.target.value)}
+                placeholder="Supplier cost"
+                disabled={isIssued}
+                className="w-28 min-h-[32px] rounded border border-slate-200 bg-white px-2 text-right font-mono-tabular disabled:opacity-50"
+              />
+              <button
+                type="button"
+                disabled={isIssued || bulkCost.trim() === ''}
+                onClick={() => { applyBulk({ supplierUnitCost: parseOptionalNumber(bulkCost) }); setBulkCost(''); }}
+                className="rounded border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-50 cursor-pointer"
+              >
+                Set cost
+              </button>
+              <button
+                type="button"
+                disabled={isIssued}
+                onClick={() => applyBulk({ supplierUnitCost: null })}
+                className="rounded border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-50 cursor-pointer"
+              >
+                Clear costs
+              </button>
+              <button
+                type="button"
+                disabled={isIssued}
+                onClick={() => applyBulk({ boxLengthCm: null, boxWidthCm: null, boxHeightCm: null })}
+                className="rounded border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-50 cursor-pointer"
+              >
+                Clear box size
+              </button>
+              <button type="button" onClick={rowSel.clear} className="ml-auto text-slate-600 underline cursor-pointer">
+                Deselect all
+              </button>
+            </div>
+          )}
+
           <div className="overflow-x-auto sheet-scroll">
             <table className="w-full border-collapse text-xs">
               <thead>
                 <tr style={{ backgroundColor: theme.primary, color: theme.primaryText }}>
+                  <th className="py-2.5 px-2 text-center w-8">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all rows"
+                      disabled={selectableRows.length === 0}
+                      checked={rowSel.allChecked(selectableRows)}
+                      onChange={() => rowSel.toggleAll(selectableRows)}
+                    />
+                  </th>
                   <th className="py-2.5 px-2.5 text-center font-semibold border-r border-white/15 w-11">Row</th>
                   <th className="py-2.5 px-3 text-left font-semibold min-w-[150px]">Offered Description</th>
                   <th className="py-2.5 px-2 text-right font-semibold w-14">Qty</th>
@@ -524,6 +584,15 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                       className={`${isInactive ? 'opacity-50' : ''} hover:bg-slate-50/90 transition-colors`}
                       style={!isInactive && idx % 2 === 1 ? { backgroundColor: theme.zebraRow } : undefined}
                     >
+                      <td className="py-1.5 px-2 text-center">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select row ${row.rowNumber}`}
+                          disabled={isInactive}
+                          checked={rowSel.has(row.rowNumber)}
+                          onChange={() => rowSel.toggle(row.rowNumber)}
+                        />
+                      </td>
                       <td className="py-1.5 px-2.5 text-center text-slate-400 border-r border-slate-100">
                         {row.rowNumber}
                       </td>
@@ -650,7 +719,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                   className="font-semibold font-mono-tabular border-t-2"
                   style={{ backgroundColor: theme.totalBg, borderColor: theme.strongBorder }}
                 >
-                  <td colSpan={2} className="py-3 px-3 text-left font-sans text-slate-900">
+                  <td colSpan={3} className="py-3 px-3 text-left font-sans text-slate-900">
                     TOTALS (Rows 17–36)
                   </td>
                   <td className="py-3 px-2 text-right text-slate-900">{calc.totalQty}</td>

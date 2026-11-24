@@ -10,6 +10,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { DOC_META } from '../constants/themes';
+import { useRowSelection } from '../hooks/useRowSelection';
 import {
   CompanyProfile,
   ConfirmDialogRequest,
@@ -118,6 +119,21 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
   const issuedCount = entries.filter((e) => e.status === 'ISSUED').length;
   const voidCount = entries.filter((e) => e.status === 'VOID').length;
   const uniqueJobSequences = new Set(entries.map((e) => e.sequence)).size;
+  const rowSel = useRowSelection<string>();
+  const filteredKeys = filtered.map((e) => e.docNumber);
+  const handleExportSelected = async () => {
+    const chosen = entries.filter((e) => rowSel.has(e.docNumber));
+    if (chosen.length === 0) return;
+    setExporting(true);
+    try {
+      const filename = await exportMasterRegistryXlsx(chosen, theme, company);
+      onNotify(`Exported ${filename} (${chosen.length} selected records)`);
+    } catch {
+      onNotify('Failed to export the selected records. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const handleExportRegistry = async () => {
     setExporting(true);
@@ -344,6 +360,23 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
         </div>
       </div>
 
+      {rowSel.count > 0 && (
+        <div className="no-print flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+          <span className="font-semibold text-slate-900">{rowSel.count} record{rowSel.count === 1 ? '' : 's'} selected</span>
+          <button
+            type="button"
+            disabled={exporting}
+            onClick={handleExportSelected}
+            className="rounded border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-50 cursor-pointer"
+          >
+            Export selected (.xlsx)
+          </button>
+          <button type="button" onClick={rowSel.clear} className="ml-auto text-slate-600 underline cursor-pointer">
+            Deselect all
+          </button>
+        </div>
+      )}
+
       <div className="flex justify-end">
         <button
           type="button"
@@ -360,6 +393,15 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
           <table className="w-full border-collapse text-xs">
             <thead>
               <tr style={{ backgroundColor: theme.primary, color: theme.primaryText }}>
+                <th className="py-2.5 px-2 text-center font-semibold w-8">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all records"
+                    disabled={filteredKeys.length === 0}
+                    checked={rowSel.allChecked(filteredKeys)}
+                    onChange={() => rowSel.toggleAll(filteredKeys)}
+                  />
+                </th>
                 <th className="py-2.5 px-2 text-center font-semibold w-14">
                   <button
                     type="button"
@@ -462,6 +504,14 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
                       style={idx % 2 === 1 ? { backgroundColor: theme.zebraRow } : undefined}
                       className="hover:bg-slate-50 transition-colors"
                     >
+                      <td className="py-3 px-2 text-center">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${entry.docNumber}`}
+                          checked={rowSel.has(entry.docNumber)}
+                          onChange={() => rowSel.toggle(entry.docNumber)}
+                        />
+                      </td>
                       <td className="py-2.5 px-2 text-center font-mono-tabular text-slate-500">
                         #{String(entry.sequence).padStart(3, '0')}
                       </td>

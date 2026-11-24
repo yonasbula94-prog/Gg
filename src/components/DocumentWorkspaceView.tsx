@@ -57,6 +57,7 @@ import {
 import { exportIssuedDocumentXlsx } from '../utils/excelEngine';
 import { HelpTip } from './HelpTip';
 import { IPadJobEditor } from './IPadJobEditor';
+import { useRowSelection } from '../hooks/useRowSelection';
 
 interface DocumentWorkspaceViewProps {
   job: ProcurementJob;
@@ -164,6 +165,12 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
   const endUser = getResolvedEndUser(job);
   const curr = job.controls.currency;
   const activeRows = calc.rows.filter((r) => !r.isEmpty);
+  const rowSel = useRowSelection<number>();
+  const [bulkUom, setBulkUom] = useState('');
+  const selectableRowIds = activeRows.map((r) => r.rowNumber);
+  const applyBulkRows = (patch: Partial<JobItemRow>) => {
+    rowSel.selected.forEach((rn) => onUpdateItem(rn, patch));
+  };
   const customColumns = job.customColumns || [];
   const customColMap = new Map(customColumns.map((c) => [`custom:${c.id}`, c]));
 
@@ -1566,10 +1573,61 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                 </div>
               </div>
 
+              {rowSel.count > 0 && !isLocked && (
+                <div className="no-print flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+                  <span className="font-semibold text-slate-900">{rowSel.count} row{rowSel.count === 1 ? '' : 's'} selected</span>
+                  <span className="text-slate-300">|</span>
+                  <select
+                    value={bulkUom}
+                    onChange={(e) => setBulkUom(e.target.value)}
+                    className="min-h-[32px] rounded border border-slate-200 bg-white px-2"
+                  >
+                    <option value="">Set UoM…</option>
+                    {UOM_OPTIONS.map((u) => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={!bulkUom}
+                    onClick={() => { applyBulkRows({ uom: bulkUom }); setBulkUom(''); }}
+                    className="rounded border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-50 cursor-pointer"
+                  >
+                    Apply UoM
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyBulkRows({ qty: null })}
+                    className="rounded border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-800 hover:bg-slate-100 cursor-pointer"
+                  >
+                    Clear qty
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyBulkRows({ requestedDescription: '', offeredDescription: '', uom: '', qty: null })}
+                    className="rounded border border-red-200 bg-white px-2.5 py-1.5 font-medium text-red-700 hover:bg-red-50 cursor-pointer"
+                  >
+                    Clear selected rows
+                  </button>
+                  <button type="button" onClick={rowSel.clear} className="ml-auto text-slate-600 underline cursor-pointer">
+                    Deselect all
+                  </button>
+                </div>
+              )}
+
               <div className="overflow-x-auto sheet-scroll">
                 <table className="w-full border-collapse text-xs">
                   <thead>
                     <tr style={{ backgroundColor: theme.primary, color: theme.primaryText }}>
+                      <th className="py-2.5 px-2 text-center w-8">
+                        <input
+                          type="checkbox"
+                          aria-label="Select all rows"
+                          disabled={selectableRowIds.length === 0 || isLocked}
+                          checked={rowSel.allChecked(selectableRowIds)}
+                          onChange={() => rowSel.toggleAll(selectableRowIds)}
+                        />
+                      </th>
                       <th className="py-2.5 px-2.5 text-center font-semibold w-12">Row</th>
                       {orderedColKeys.map((colKey, colIdx) => {
                         const colMeta = getColumnHeaderMeta(colKey, false);
@@ -1834,6 +1892,15 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                           className="hover:bg-slate-50/90 transition-colors"
                           style={idx % 2 === 1 ? { backgroundColor: theme.zebraRow } : undefined}
                         >
+                          <td className="py-1.5 px-2 text-center">
+                            <input
+                              type="checkbox"
+                              aria-label={`Select row ${row.rowNumber}`}
+                              disabled={row.isEmpty || isLocked}
+                              checked={rowSel.has(row.rowNumber)}
+                              onChange={() => rowSel.toggle(row.rowNumber)}
+                            />
+                          </td>
                           <td className="py-1.5 px-2.5 text-center font-mono-tabular text-slate-400">
                             {row.rowNumber}
                           </td>
