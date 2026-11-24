@@ -271,6 +271,10 @@ export interface SupplierRfqData {
   showEndUser: boolean;
   /** File the item lines were uploaded from */
   sourceName: string;
+  /** Supplier-facing terms. Empty means the job's value is used. */
+  currency: string;
+  incoterm: string;
+  destination: string;
 }
 
 export interface ProcurementJob {

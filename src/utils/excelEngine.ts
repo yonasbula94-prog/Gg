@@ -2706,7 +2706,9 @@ export async function exportSupplierRfqXlsx(
   const fontName = theme.fontName || 'Calibri';
   const rfq = job.supplierRfq;
   const rfqNumber = rfq?.rfqNumber || (job.jobSequence ? `SRFQ-${String(job.jobSequence).padStart(3, '0')}` : '');
-  const currency = job.controls.currency || 'USD';
+  const currency = rfq?.currency || job.controls.currency || 'USD';
+  const incoterm = rfq?.incoterm || job.controls.incoterm || '';
+  const destination = rfq?.destination || job.controls.destination || '';
   const items = job.items.filter((it) => it.requestedDescription || it.offeredDescription);
   const endUser = job.controls.endUserSelect === 'OTHER' ? job.controls.customEndUser : job.controls.endUserSelect;
 
@@ -2746,7 +2748,7 @@ export async function exportSupplierRfqXlsx(
       ['RFQ NO.', rfqNumber || '—'],
       ['QUOTES DUE BY', rfq?.responseDueDate || '—'],
       ['YOUR REFERENCE', job.controls.rfqRef || '—'],
-      ['DESTINATION', `${job.controls.incoterm} · ${job.controls.destination}`],
+      ['DESTINATION', `${incoterm} · ${destination}`],
     ],
   });
 
@@ -2784,7 +2786,7 @@ export async function exportSupplierRfqXlsx(
 
   let cursor = 12 + Math.max(items.length, 1) + 1;
   const endUserLine = rfq?.showEndUser && endUser ? `\nEnd user: ${endUser}` : '';
-  const terms = `Please quote unit price and total in ${currency}, delivered ${job.controls.incoterm} ${job.controls.destination}, with lead time, validity and country of origin. Include certificates of analysis or safety data sheets where they apply.${endUserLine}`;
+  const terms = `Please quote unit price and total in ${currency}, delivered ${incoterm} ${destination}, with lead time, validity and country of origin. Include certificates of analysis or safety data sheets where they apply.${endUserLine}`;
   ws.mergeCells(cursor, 2, cursor, lastCol);
   const termCell = ws.getCell(cursor, 2);
   termCell.value = terms;

@@ -399,6 +399,9 @@ function normalizeSupplierRfq(raw: unknown): SupplierRfqData | undefined {
     responseDueDate: /^\d{4}-\d{2}-\d{2}$/.test(str(r.responseDueDate, 10)) ? str(r.responseDueDate, 10) : '',
     showEndUser: r.showEndUser === true,
     sourceName: str(r.sourceName, 200),
+    currency: str(r.currency, 10),
+    incoterm: str(r.incoterm, 20),
+    destination: str(r.destination, 120),
   };
 }
 
