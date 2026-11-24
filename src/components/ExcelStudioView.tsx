@@ -713,7 +713,7 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
 
               {/* Preset Cards */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-                {(['v1', 'v2', 'v3'] as ThemeVariantId[]).map((id) => {
+                {(['v1', 'v3'] as ThemeVariantId[]).map((id) => {
                   const isSelected = themeId === id;
                   const t = isSelected ? theme : EXCEL_THEMES[id];
 

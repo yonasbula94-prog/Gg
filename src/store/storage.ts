@@ -7,6 +7,7 @@ import {
   END_USER_OPTIONS,
 } from '../constants/themes';
 import {
+  AuditEntry,
   CompanyProfile,
   CustomColumnDef,
   CustomColumnPosition,
@@ -33,6 +34,7 @@ export const STORAGE_KEYS = {
   COMPANY: 'gg_fzc_company_profile_v1',
   ADMIN_PASS: 'gg_fzc_admin_pass_v1',
   DASHBOARD_PREFS: 'gg_fzc_dashboard_prefs_v1',
+  AUDIT_LOG: 'gg_fzc_audit_log_v1',
 };
 
 export const DEFAULT_ADMIN_PASSWORD = 'GGAdmin2026';
@@ -708,7 +710,7 @@ export function saveRegistry(entries: RegistryEntry[]): boolean {
 export function loadThemeVariant(): ThemeVariantId {
   try {
     const val = localStorage.getItem(STORAGE_KEYS.THEME);
-    if (val === 'v1' || val === 'v2' || val === 'v3') return val;
+    if (val === 'v1' || val === 'v3') return val; // v2 was retired; fall back to v1
     return 'v1';
   } catch {
     return 'v1';
@@ -834,7 +836,7 @@ export function exportEmergencyRawStorageJson(): string {
 
 export function clearAllAppStorage(): void {
   // The Master Registry is kept on purpose: clearing it would let issued numbers be claimed again.
-  for (const key of Object.values(STORAGE_KEYS).filter((k) => k !== STORAGE_KEYS.REGISTRY)) {
+  for (const key of Object.values(STORAGE_KEYS).filter((k) => k !== STORAGE_KEYS.REGISTRY && k !== STORAGE_KEYS.AUDIT_LOG)) {
     try {
       localStorage.removeItem(key);
     } catch {
@@ -858,4 +860,26 @@ export function mergeRegistryEntries(base: RegistryEntry[], incoming: RegistryEn
   return Array.from(byDoc.values()).sort(
     (a, b) => a.sequence - b.sequence || a.docNumber.localeCompare(b.docNumber)
   );
+}
+
+/** Change log for issued documents. Kept separate from job data and survives a storage reset. */
+export function loadAuditLog(): AuditEntry[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.AUDIT_LOG);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? (parsed as AuditEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function appendAuditLog(entries: AuditEntry[]): boolean {
+  if (entries.length === 0) return true;
+  try {
+    const next = [...loadAuditLog(), ...entries];
+    localStorage.setItem(STORAGE_KEYS.AUDIT_LOG, JSON.stringify(next));
+    return true;
+  } catch {
+    return false;
+  }
 }

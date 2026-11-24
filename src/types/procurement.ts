@@ -2,7 +2,7 @@ export type DocPrefix = 'QT' | 'PI' | 'PO' | 'PL' | 'DN' | 'CI';
 
 export type MarkupRate = 0.1 | 0.15 | 0.18 | 0.2;
 
-export type ThemeVariantId = 'v1' | 'v2' | 'v3';
+export type ThemeVariantId = 'v1' | 'v3';
 
 export type InquiryType = 'RFQ' | 'TENDER';
 
@@ -210,6 +210,41 @@ export interface IssuedDocRecord {
   frozenVat: number;
   frozenFreight: number;
   frozenGrandTotal: number;
+  // Revision control: Rev 1 is the original issue; later saves add Rev 2, Rev 3, ...
+  revision?: number;
+  // Previous revisions and their totals. Purged once the job is complete (Delivery Note issued).
+  history?: IssuedRevision[];
+}
+
+export interface IssuedRevision {
+  revision: number;
+  docNumber: string;
+  supersededAt: string;
+  reason: string;
+  frozenSubtotal: number;
+  frozenVat: number;
+  frozenFreight: number;
+  frozenGrandTotal: number;
+}
+
+export interface FieldChange {
+  field: string;
+  from: string;
+  to: string;
+}
+
+export interface AuditEntry {
+  id: string;
+  at: string;
+  jobId: string;
+  jobName: string;
+  docNumber: string;
+  prefix: DocPrefix;
+  revision: number;
+  reason: string;
+  field: string;
+  from: string;
+  to: string;
 }
 
 export interface ProcurementJob {
@@ -247,6 +282,7 @@ export interface RegistryEntry {
   issuedAt: string;
   status: 'ISSUED' | 'VOID';
   voidReason?: string;
+  revision?: number;
 }
 
 export interface ValidationIssue {

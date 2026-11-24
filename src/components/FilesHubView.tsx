@@ -163,7 +163,7 @@ export const FilesHubView: React.FC<FilesHubViewProps> = ({
         const incomingRegistry = parsed.registry as RegistryEntry[];
         const incomingCompany = parsed.company as CompanyProfile | undefined;
         const incomingThemeId =
-          parsed.themeId === 'v1' || parsed.themeId === 'v2' || parsed.themeId === 'v3'
+          parsed.themeId === 'v1' || parsed.themeId === 'v3'
             ? (parsed.themeId as ThemeVariantId)
             : undefined;
         const incomingThemeCustom = parsed.themeCustomization as ThemeCustomization | undefined;

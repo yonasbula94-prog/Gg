@@ -57,7 +57,13 @@ import {
   saveRegistry,
   saveThemeCustomization,
   saveThemeVariant,
+  appendAuditLog,
+  loadAuditLog,
+  verifyAdminPassword,
 } from './store/storage';
+import { AmendmentDialog } from './components/AmendmentDialog';
+import { diffJobs, isJobLocked, purgeRevisionHistory } from './utils/amendments';
+import { shareOrDownloadBlob } from './utils/platform';
 import {
   CompanyProfile,
   ConfirmDialogRequest,
@@ -76,6 +82,9 @@ import {
   ThemeCustomization,
   ThemeVariantId,
   WorkspaceTab,
+  AuditEntry,
+  IssuedDocRecord,
+  IssuedRevision,
 } from './types/procurement';
 import { calculateJob, formatMoney, formatPct, getResolvedEndUser } from './utils/calculations';
 import { importWorkbookFromXlsx } from './utils/excelEngine';
@@ -132,6 +141,9 @@ export default function App() {
   );
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogRequest | null>(null);
   const [pendingSupplierQuote, setPendingSupplierQuote] = useState<ParsedSupplierQuote | null>(null);
+  // Issued-document amendment: one document is unlocked at a time; the snapshot allows discard.
+  const [amendment, setAmendment] = useState<{ jobId: string; prefix: DocPrefix; snapshot: ProcurementJob } | null>(null);
+  const [amendDialog, setAmendDialog] = useState<{ mode: "unlock" | "save"; prefix: DocPrefix } | null>(null);
   const quickImportRef = useRef<HTMLInputElement | null>(null);
 
   const activeJob = useMemo(
@@ -162,6 +174,11 @@ export default function App() {
     }
   }, [registry]);
 
+  useEffect(() => {
+    const purged = purgeRevisionHistory(jobs);
+    if (purged !== jobs) setJobs(purged);
+  }, [jobs]);
+
   useEffect(() => saveThemeVariant(themeId), [themeId]);
   useEffect(() => {
     saveThemeCustomization(themeCustomization);
@@ -185,7 +202,7 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  const mutateActiveJob = (updater: (job: ProcurementJob) => ProcurementJob) => {
+  const mutateSystemJob = (updater: (job: ProcurementJob) => ProcurementJob) => {
     setJobs((prev) =>
       prev.map((j) =>
         j.id === activeJob.id
@@ -193,6 +210,16 @@ export default function App() {
           : j
       )
     );
+  };
+
+  // User edits: blocked on a locked job unless this job is open for amendment.
+  const mutateActiveJob = (updater: (job: ProcurementJob) => ProcurementJob) => {
+    const amending = amendment?.jobId === activeJob.id;
+    if (isJobLocked(activeJob) && !amending) {
+      showToast("Issued document is locked. Use Unlock on the document to make changes.");
+      return;
+    }
+    mutateSystemJob(updater);
   };
 
   const handleUpdateJobName = (name: string) => {
@@ -226,7 +253,7 @@ export default function App() {
   };
 
   const handleUpdateWorkflow = (patch: Partial<JobWorkflowState>) => {
-    mutateActiveJob((j) => ({
+    mutateSystemJob((j) => ({
       ...j,
       workflow: { ...j.workflow, ...patch },
     }));
@@ -375,7 +402,7 @@ export default function App() {
     };
 
     setRegistry((prev) => [...prev, newRegEntry]);
-    mutateActiveJob((j) => {
+    mutateSystemJob((j) => {
       let nextControls = j.controls;
       let nextItems = j.items;
       let nextWorkflow = j.workflow;
@@ -653,6 +680,108 @@ export default function App() {
   const handleResetThemeCustomization = () => {
     saveThemeCustomization({});
     setThemeCustomization({});
+  };
+
+  // ==================== ISSUED-DOCUMENT AMENDMENTS ====================
+  const amendingJob = amendment?.jobId === activeJob.id;
+
+  const handleStartAmendment = (prefix: DocPrefix) => {
+    setAmendment({ jobId: activeJob.id, prefix, snapshot: safeDeepClone(activeJob) });
+    setAmendDialog(null);
+    showToast(`${prefix} unlocked for amendment. Changes are logged when you save a revision.`);
+  };
+
+  const handleDiscardAmendment = () => {
+    if (!amendment) return;
+    const snap = amendment.snapshot;
+    setJobs((prev) => prev.map((j) => (j.id === snap.id ? snap : j)));
+    setAmendment(null);
+    showToast('Changes discarded. The document keeps its saved revision.');
+  };
+
+  const handleSaveRevision = (reason: string) => {
+    if (!amendment) return;
+    const { prefix, snapshot } = amendment;
+    const job = activeJob;
+    const changes = diffJobs(snapshot, job);
+    const doc = job.issuedDocs[prefix];
+    if (!doc || doc.isVoided) {
+      setAmendment(null);
+      setAmendDialog(null);
+      return;
+    }
+    if (changes.length === 0) {
+      setAmendment(null);
+      setAmendDialog(null);
+      showToast('No changes to save. The document is unchanged.');
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const previousRev = doc.revision ?? 1;
+    const newRev = previousRev + 1;
+    const newCalc = calculateJob(job);
+    const docAmount =
+      prefix === 'PO' ? newCalc.totalSupplierCost : prefix === 'PL' || prefix === 'DN' ? 0 : newCalc.grandTotal;
+
+    const superseded: IssuedRevision = {
+      revision: previousRev,
+      docNumber: doc.docNumber,
+      supersededAt: now,
+      reason,
+      frozenSubtotal: doc.frozenSubtotal,
+      frozenVat: doc.frozenVat,
+      frozenFreight: doc.frozenFreight,
+      frozenGrandTotal: doc.frozenGrandTotal,
+    };
+    const nextDoc: IssuedDocRecord = {
+      ...doc,
+      revision: newRev,
+      frozenSubtotal: newCalc.goodsSubtotal,
+      frozenVat: newCalc.vatAmount,
+      frozenFreight: newCalc.customerFreight,
+      frozenGrandTotal: newCalc.grandTotal,
+      history: [...(doc.history ?? []), superseded],
+    };
+
+    setJobs((prev) =>
+      prev.map((j) =>
+        j.id === job.id ? { ...job, updatedAt: now, issuedDocs: { ...job.issuedDocs, [prefix]: nextDoc } } : j
+      )
+    );
+    setRegistry((prev) =>
+      prev.map((e) => (e.docNumber === doc.docNumber ? { ...e, amount: docAmount, revision: newRev } : e))
+    );
+
+    const entries: AuditEntry[] = changes.map((c, i) => ({
+      id: `aud-${Date.now().toString(36)}-${i}`,
+      at: now,
+      jobId: job.id,
+      jobName: job.jobName,
+      docNumber: doc.docNumber,
+      prefix,
+      revision: newRev,
+      reason,
+      field: c.field,
+      from: c.from,
+      to: c.to,
+    }));
+    if (!appendAuditLog(entries)) {
+      showToast('Revision saved, but the change log could not be written (browser storage is full).');
+    } else {
+      showToast(`Saved ${doc.docNumber} as Rev ${newRev}. ${changes.length} change(s) logged.`);
+    }
+    setAmendment(null);
+    setAmendDialog(null);
+  };
+
+  const handleExportAuditLog = async () => {
+    const entries = loadAuditLog();
+    const payload = { exportedAt: new Date().toISOString(), entries };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const filename = `GG_Audit_Log_${new Date().toISOString().slice(0, 10)}.json`;
+    await shareOrDownloadBlob(blob, filename, 'application/json');
+    showToast(`Exported ${entries.length} audit log entries.`);
   };
 
   const handleRestoreBackup = (
@@ -1042,6 +1171,11 @@ export default function App() {
               onUpdateColumnOrder={handleUpdateColumnOrder}
               onUpdateItem={handleUpdateItem}
               onIssueDocument={handleIssueDocument}
+              amending={amendingJob}
+              amendingPrefix={amendingJob ? amendment?.prefix ?? null : null}
+              onRequestUnlock={(p) => setAmendDialog({ mode: "unlock", prefix: p })}
+              onRequestSave={(p) => setAmendDialog({ mode: "save", prefix: p })}
+              onDiscardAmendment={handleDiscardAmendment}
               onDuplicateAsNewJob={handleDuplicateAsNewJob}
               onNavigateTab={setActiveTab}
               onRequestConfirm={setConfirmDialog}
@@ -1052,6 +1186,7 @@ export default function App() {
           {activeTab === 'PRICE_CALC' && (
             <PriceCalcView
               job={activeJob}
+              amending={amendingJob}
               calc={calc}
               theme={theme}
               platformMode={platformMode}
@@ -1072,6 +1207,7 @@ export default function App() {
               onVoidEntry={handleVoidRegistryEntry}
               onSyncRegistryEntries={handleSyncRegistry}
               onResetRegistry={handleResetRegistry}
+              onExportAuditLog={handleExportAuditLog}
               onRequestConfirm={setConfirmDialog}
               onNotify={showToast}
             />
@@ -1171,6 +1307,20 @@ export default function App() {
         </div>
       )}
 
+      {amendDialog && (
+        <AmendmentDialog
+          mode={amendDialog.mode}
+          docNumber={activeJob.issuedDocs[amendDialog.prefix]?.docNumber ?? amendDialog.prefix}
+          currentRevision={activeJob.issuedDocs[amendDialog.prefix]?.revision ?? 1}
+          otherIssuedDocs={Object.values(activeJob.issuedDocs)
+            .filter((d): d is IssuedDocRecord => Boolean(d && !d.isVoided && d.prefix !== amendDialog.prefix))
+            .map((d) => d.prefix)}
+          verifyPassword={verifyAdminPassword}
+          onConfirmUnlock={() => handleStartAmendment(amendDialog.prefix)}
+          onConfirmSave={handleSaveRevision}
+          onCancel={() => setAmendDialog(null)}
+        />
+      )}
       <OfflineIndicator />
     </div>
   );

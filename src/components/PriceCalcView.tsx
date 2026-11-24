@@ -19,6 +19,7 @@ import { IPadJobEditor } from './IPadJobEditor';
 
 interface PriceCalcViewProps {
   job: ProcurementJob;
+  amending: boolean;
   calc: JobCalculationSummary;
   theme: ThemePalette;
   platformMode: PlatformMode;
@@ -38,6 +39,7 @@ function parseOptionalNumber(val: string): number | null {
 
 export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
   job,
+  amending,
   calc,
   theme,
   platformMode,
@@ -55,7 +57,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
   const vatRateDisplay = Math.round((job.controls.vatRate * 100 + Number.EPSILON) * 100) / 100;
   const effectiveVat = calc.effectiveVatRate;
   // Once any document is issued the costing is frozen: edits would change the issued totals.
-  const isIssued = Object.values(job.issuedDocs).some((d) => d && !d.isVoided);
+  const isIssued = !amending && Object.values(job.issuedDocs).some((d) => d && !d.isVoided);
   const guardItem = (rowNumber: number, patch: Partial<JobItemRow>) => {
     if (!isIssued) onUpdateItem(rowNumber, patch);
   };

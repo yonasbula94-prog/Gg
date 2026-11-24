@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
+  Save,
+  Unlock,
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
@@ -76,6 +78,11 @@ interface DocumentWorkspaceViewProps {
   onNavigateTab: (tab: WorkspaceTab) => void;
   onRequestConfirm: (req: ConfirmDialogRequest) => void;
   onNotify: (msg: string) => void;
+  amending: boolean;
+  amendingPrefix: DocPrefix | null;
+  onRequestUnlock: (prefix: DocPrefix) => void;
+  onRequestSave: (prefix: DocPrefix) => void;
+  onDiscardAmendment: () => void;
 }
 
 const PRESET_CUSTOM_COLUMNS = [
@@ -121,6 +128,11 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
   onNavigateTab,
   onRequestConfirm,
   onNotify,
+  amending,
+  amendingPrefix,
+  onRequestUnlock,
+  onRequestSave,
+  onDiscardAmendment,
 }) => {
   const [subView, setSubView] = useState<'edit' | 'preview'>(prefix === 'QT' ? 'edit' : 'preview');
   const [controlsOpen, setControlsOpen] = useState(true);
@@ -143,7 +155,10 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
 
   const meta = DOC_META[prefix];
   const issued = job.issuedDocs[prefix];
-  const isLocked = Boolean(issued && !issued.isVoided);
+  const isIssued = Boolean(issued && !issued.isVoided);
+  // Locked unless this job is open for an amendment (one document unlocked at a time)
+  const isLocked = isIssued && !amending;
+  const isAmendingThisDoc = amending && amendingPrefix === prefix;
   const isLogistics = prefix === 'PL' || prefix === 'DN';
   const isPO = prefix === 'PO';
   const endUser = getResolvedEndUser(job);
@@ -460,7 +475,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
             <div className="text-xs flex items-center gap-2 font-mono-tabular">
               <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700">
                 <CheckCircle2 className="w-3.5 h-3.5" />
-                Issued · {issued.docNumber}
+                Issued · {issued.docNumber}{issued.revision && issued.revision > 1 ? ` · Rev ${issued.revision}` : ""}
               </span>
             </div>
           ) : job.jobSequence ? (
@@ -474,7 +489,39 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
 
         {/* Right Actions: Issue, Export Values-Only .xlsx, Print PDF */}
         <div className="flex flex-wrap items-center gap-2">
-          {isLocked ? (
+          {amending && (
+            <>
+              {isAmendingThisDoc && (
+                <button
+                  type="button"
+                  onClick={() => onRequestSave(prefix)}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90 cursor-pointer min-h-[40px] whitespace-nowrap"
+                  style={{ backgroundColor: theme.primary }}
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Save as Rev {(issued?.revision ?? 1) + 1}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onDiscardAmendment}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer min-h-[40px] whitespace-nowrap"
+              >
+                <span>Discard changes</span>
+              </button>
+            </>
+          )}
+          {isIssued && !amending && (
+            <button
+              type="button"
+              onClick={() => onRequestUnlock(prefix)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-50 cursor-pointer min-h-[40px] whitespace-nowrap"
+            >
+              <Unlock className="w-3.5 h-3.5" />
+              <span>Unlock to amend</span>
+            </button>
+          )}
+          {amending ? null : isLocked ? (
             <button
               type="button"
               onClick={onDuplicateAsNewJob}
@@ -675,6 +722,11 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
         </div>
       )}
 
+      {amending && subView === "edit" && (
+        <div className="no-print rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+          Job is open for amendment{amendingPrefix ? ` ()` : ""}. Every change is logged; save a revision to record the reason.
+        </div>
+      )}
       {/* Locked Notice when Issued */}
       {isLocked && subView === 'edit' && (
         <div className="no-print rounded-lg border border-emerald-200 bg-emerald-50/70 px-4 py-3 text-xs text-emerald-900 flex items-center justify-between gap-3">

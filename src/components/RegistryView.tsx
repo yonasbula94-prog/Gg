@@ -38,6 +38,7 @@ interface RegistryViewProps {
   onVoidEntry: (docNumber: string, reason: string) => void;
   onSyncRegistryEntries: (entries: RegistryEntry[]) => void;
   onResetRegistry: () => void;
+  onExportAuditLog: () => void;
   onRequestConfirm: (req: ConfirmDialogRequest) => void;
   onNotify: (msg: string) => void;
 }
@@ -50,6 +51,7 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
   onVoidEntry,
   onSyncRegistryEntries,
   onResetRegistry,
+  onExportAuditLog,
   onRequestConfirm,
   onNotify,
 }) => {
@@ -340,6 +342,16 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
             <span>{exporting ? 'Exporting...' : 'Export Master_Registry.xlsx'}</span>
           </button>
         </div>
+      </div>
+
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={onExportAuditLog}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer min-h-[40px]"
+        >
+          <span>Export Change Log (.json)</span>
+        </button>
       </div>
 
       {/* Registry Ledger Table with Clickable Sortable Headers */}
