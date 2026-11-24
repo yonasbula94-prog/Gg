@@ -755,47 +755,76 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
         <div className="rounded-lg border border-slate-200 bg-white p-5">
           <div className="flex items-center gap-1.5">
             <h3 className="text-sm font-semibold text-slate-900">
-              Freight Calculation Breakdown (MAX Basis)
+              {calc.freightMode === 'sea' ? 'Freight Calculation Breakdown (Sea · Containers)' : 'Freight Calculation Breakdown (MAX Basis)'}
             </h3>
-            <HelpTip text={`Takes the higher of Volume (CBM) or Weight (Gross KG) freight, adds the Documentation Charge (${formatPct(job.freight.docChargePct)}), then applies the active ${formatPct(activeMarkup)} markup.`} />
+            <HelpTip
+              text={
+                calc.freightMode === 'sea'
+                  ? `Sea freight: containers × rate per container, plus the documentation charge (${formatPct(job.freight.docChargePct)}) and the loading charge (${formatPct(job.freight.loadingChargePct ?? 0.05)}). Then the freight markup (${formatPct(calc.freightMarkupPct)}).`
+                  : `Air freight: the higher of volume (CBM) or weight (gross KG), plus the documentation charge (${formatPct(job.freight.docChargePct)}). Then the freight markup (${formatPct(calc.freightMarkupPct)}).`
+              }
+            />
           </div>
 
           <div className="mt-4 divide-y divide-slate-100 text-sm font-mono-tabular">
-            <div className="flex justify-between py-2">
-              <span className="font-sans text-slate-600">
-                Volume Freight ({formatNumber(calc.totalCbm, 4)} CBM × {formatMoney(job.freight.ratePerCbm)})
-                {calc.freightBasis === 'CBM' && (
-                  <span className="ml-2 font-semibold text-slate-900">· Governing</span>
-                )}
-              </span>
-              <span className={calc.freightBasis === 'CBM' ? 'font-semibold text-slate-900' : 'text-slate-500'}>
-                {formatMoney(calc.freightByCbm, curr)}
-              </span>
-            </div>
-            <div className="flex justify-between py-2">
-              <span className="font-sans text-slate-600">
-                Weight Freight ({formatNumber(calc.totalGrossKgCalc, 2)} KG × {formatMoney(job.freight.ratePerKg)})
-                {calc.freightBasis === 'KG' && (
-                  <span className="ml-2 font-semibold text-slate-900">· Governing</span>
-                )}
-              </span>
-              <span className={calc.freightBasis === 'KG' ? 'font-semibold text-slate-900' : 'text-slate-500'}>
-                {formatMoney(calc.freightByKg, curr)}
-              </span>
-            </div>
-            <div className="flex justify-between py-2">
-              <span className="font-sans text-slate-700 font-medium">Base Freight (MAX)</span>
-              <span className="font-medium text-slate-900">{formatMoney(calc.baseFreight, curr)}</span>
-            </div>
+            {calc.freightMode === 'sea' ? (
+              <>
+                {calc.seaLines.map((l) => (
+                  <div key={l.key} className="flex justify-between py-2">
+                    <span className="font-sans text-slate-600">
+                      {l.label} × {l.qty} @ {formatMoney(l.rate)}
+                    </span>
+                    <span className={l.amount > 0 ? 'text-slate-900' : 'text-slate-400'}>{formatMoney(l.amount, curr)}</span>
+                  </div>
+                ))}
+                <div className="flex justify-between py-2">
+                  <span className="font-sans text-slate-700 font-medium">Container Freight (total)</span>
+                  <span className="font-medium text-slate-900">{formatMoney(calc.baseFreight, curr)}</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex justify-between py-2">
+                  <span className="font-sans text-slate-600">
+                    Volume Freight ({formatNumber(calc.totalCbm, 4)} CBM × {formatMoney(job.freight.ratePerCbm)})
+                    {calc.freightBasis === 'CBM' && <span className="ml-2 font-semibold text-slate-900">· Governing</span>}
+                  </span>
+                  <span className={calc.freightBasis === 'CBM' ? 'font-semibold text-slate-900' : 'text-slate-500'}>
+                    {formatMoney(calc.freightByCbm, curr)}
+                  </span>
+                </div>
+                <div className="flex justify-between py-2">
+                  <span className="font-sans text-slate-600">
+                    Weight Freight ({formatNumber(calc.totalGrossKgCalc, 2)} KG × {formatMoney(job.freight.ratePerKg)})
+                    {calc.freightBasis === 'KG' && <span className="ml-2 font-semibold text-slate-900">· Governing</span>}
+                  </span>
+                  <span className={calc.freightBasis === 'KG' ? 'font-semibold text-slate-900' : 'text-slate-500'}>
+                    {formatMoney(calc.freightByKg, curr)}
+                  </span>
+                </div>
+                <div className="flex justify-between py-2">
+                  <span className="font-sans text-slate-700 font-medium">Base Freight (MAX)</span>
+                  <span className="font-medium text-slate-900">{formatMoney(calc.baseFreight, curr)}</span>
+                </div>
+              </>
+            )}
             <div className="flex justify-between py-2">
               <span className="font-sans text-slate-600">
                 + Documentation Charge ({formatPct(job.freight.docChargePct)})
               </span>
               <span className="text-slate-900">{formatMoney(calc.docChargeAmount, curr)}</span>
             </div>
+            {calc.freightMode === 'sea' && (
+              <div className="flex justify-between py-2">
+                <span className="font-sans text-slate-600">
+                  + Loading Charge ({formatPct(job.freight.loadingChargePct ?? 0.05)})
+                </span>
+                <span className="text-slate-900">{formatMoney(calc.loadingChargeAmount, curr)}</span>
+              </div>
+            )}
             <div className="flex justify-between py-2">
               <span className="font-sans text-slate-600">
-                + Markup on Freight + Doc ({formatPct(activeMarkup)})
+                + Markup on Freight ({formatPct(calc.freightMarkupPct)})
               </span>
               <span className="text-slate-900">{formatMoney(calc.freightMarkupAmount, curr)}</span>
             </div>
