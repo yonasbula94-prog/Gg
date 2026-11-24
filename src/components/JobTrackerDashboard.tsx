@@ -30,6 +30,7 @@ import {
 } from '../utils/calculations';
 import { DashboardPdfOrientation, exportDashboardReportPdf } from "../utils/dashboardPdf";
 import { exportDashboardReportXlsx } from '../utils/excelEngine';
+import { useRowSelection } from '../hooks/useRowSelection';
 import { HelpTip } from './HelpTip';
 
 interface JobTrackerDashboardProps {
@@ -96,6 +97,20 @@ export const JobTrackerDashboard: React.FC<JobTrackerDashboardProps> = ({
   const [exportingPdf, setExportingPdf] = useState(false);
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
   const [pdfOrientation, setPdfOrientation] = useState<DashboardPdfOrientation>("landscape");
+  const jobSel = useRowSelection<string>();
+  const exportSelectedJobs = async (kind: "xlsx" | "pdf") => {
+    const chosen = jobs.filter((j) => jobSel.has(j.id));
+    if (chosen.length === 0) return;
+    try {
+      const filename =
+        kind === "xlsx"
+          ? await exportDashboardReportXlsx(chosen, registry, theme, company, prefs)
+          : await exportDashboardReportPdf(chosen, registry, theme, company, prefs, "landscape");
+      onNotify(`Exported ${filename} (${chosen.length} selected job${chosen.length === 1 ? "" : "s"})`);
+    } catch {
+      onNotify("Could not export the selected jobs. Please try again.");
+    }
+  };
 
   const handleDownloadExcelReport = async () => {
     setExportingExcel(true);
@@ -1044,10 +1059,32 @@ export const JobTrackerDashboard: React.FC<JobTrackerDashboardProps> = ({
             </span>
           </div>
 
+          {jobSel.count > 0 && (
+            <div className="no-print flex flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-xs">
+              <span className="font-semibold text-slate-900">{jobSel.count} job{jobSel.count === 1 ? '' : 's'} selected</span>
+              <button type="button" onClick={() => exportSelectedJobs('xlsx')} className="rounded border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-800 hover:bg-slate-100 cursor-pointer">
+                Export selected (.xlsx)
+              </button>
+              <button type="button" onClick={() => exportSelectedJobs('pdf')} className="rounded border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-800 hover:bg-slate-100 cursor-pointer">
+                Export selected (.pdf)
+              </button>
+              <button type="button" onClick={jobSel.clear} className="ml-auto text-slate-600 underline cursor-pointer">Deselect all</button>
+            </div>
+          )}
+
           <div className="overflow-x-auto sheet-scroll">
             <table className="w-full border-collapse text-xs">
               <thead>
                 <tr style={{ backgroundColor: theme.primary, color: theme.primaryText }}>
+                  <th className="py-3 px-2 text-center w-8">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all jobs"
+                      disabled={matrixRows.length === 0}
+                      checked={jobSel.allChecked(matrixRows.map((m) => m.job.id))}
+                      onChange={() => jobSel.toggleAll(matrixRows.map((m) => m.job.id))}
+                    />
+                  </th>
                   <th className="py-3 px-3 text-center font-semibold w-16">Seq</th>
                   <th className="py-3 px-3 text-left font-semibold min-w-[200px]">
                     Job &amp; Client
@@ -1068,7 +1105,7 @@ export const JobTrackerDashboard: React.FC<JobTrackerDashboardProps> = ({
               <tbody className="divide-y divide-slate-200">
                 {matrixRows.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="py-10 text-center text-slate-500">
+                    <td colSpan={12} className="py-10 text-center text-slate-500">
                       No jobs match the selected filter.
                     </td>
                   </tr>
@@ -1088,6 +1125,9 @@ export const JobTrackerDashboard: React.FC<JobTrackerDashboardProps> = ({
                         }
                         className="hover:bg-slate-50 transition-colors"
                       >
+                        <td className="py-2.5 px-2 text-center">
+                          <input type="checkbox" aria-label={`Select ${job.jobName}`} checked={jobSel.has(job.id)} onChange={() => jobSel.toggle(job.id)} />
+                        </td>
                         <td className="py-2.5 px-3 text-center font-mono-tabular font-semibold text-slate-700">
                           {job.jobSequence
                             ? `#${String(job.jobSequence).padStart(3, '0')}`

@@ -58,6 +58,8 @@ import { exportIssuedDocumentXlsx } from '../utils/excelEngine';
 import { HelpTip } from './HelpTip';
 import { IPadJobEditor } from './IPadJobEditor';
 import { useRowSelection } from '../hooks/useRowSelection';
+import { PasteIntoRows } from './PasteIntoRows';
+import { parseFlexibleNumber } from '../utils/supplierQuoteParser';
 
 interface DocumentWorkspaceViewProps {
   job: ProcurementJob;
@@ -1609,6 +1611,17 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                   >
                     Clear selected rows
                   </button>
+                  <PasteIntoRows
+                    disabled={isLocked}
+                    rowIds={rowSel.selected}
+                    fields={[
+                      { key: 'offeredDescription', label: 'Offered description', parse: (raw: string) => raw },
+                      { key: 'requestedDescription', label: 'Requested description', parse: (raw: string) => raw },
+                      { key: 'uom', label: 'UoM', parse: (raw: string) => raw },
+                      { key: 'qty', label: 'Qty', parse: (raw: string) => parseFlexibleNumber(raw) ?? undefined },
+                    ]}
+                    onApply={(key, pairs) => pairs.forEach((p) => onUpdateItem(p.rowId, { [key]: p.value } as Partial<JobItemRow>))}
+                  />
                   <button type="button" onClick={rowSel.clear} className="ml-auto text-slate-600 underline cursor-pointer">
                     Deselect all
                   </button>

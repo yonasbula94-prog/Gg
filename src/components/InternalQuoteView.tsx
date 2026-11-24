@@ -10,6 +10,8 @@ import {
 import { CURRENCY_OPTIONS, INCOTERM_OPTIONS, UOM_OPTIONS } from '../constants/themes';
 import { isJobLocked } from '../utils/amendments';
 import { useRowSelection } from '../hooks/useRowSelection';
+import { PasteIntoRows } from './PasteIntoRows';
+import { parseFlexibleNumber } from '../utils/supplierQuoteParser';
 import {
   ConfirmDialogRequest,
   JobCalculationSummary,
@@ -343,6 +345,17 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
             </select>
             <button type="button" disabled={!bulkUom} onClick={() => { applyBulkItems({ uom: bulkUom }); setBulkUom(''); }} className="rounded border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-50 cursor-pointer">Apply UoM</button>
             <button type="button" onClick={() => applyBulkItems({ offeredDescription: '', uom: '', qty: null, supplierUnitCost: null })} className="rounded border border-red-200 bg-white px-2.5 py-1.5 font-medium text-red-700 hover:bg-red-50 cursor-pointer">Clear selected offers</button>
+            <PasteIntoRows
+              disabled={locked}
+              rowIds={rowSel.selected}
+              fields={[
+                { key: 'offeredDescription', label: 'Offered spec', parse: (raw: string) => raw },
+                { key: 'uom', label: 'UoM', parse: (raw: string) => raw },
+                { key: 'qty', label: 'Qty', parse: (raw: string) => parseFlexibleNumber(raw) ?? undefined },
+                { key: 'supplierUnitCost', label: 'Supplier cost', parse: (raw: string) => parseFlexibleNumber(raw) ?? undefined },
+              ]}
+              onApply={(key, pairs) => pairs.forEach((p) => onUpdateItem(p.rowId, { [key]: p.value } as Partial<JobItemRow>))}
+            />
             <button type="button" onClick={rowSel.clear} className="ml-auto text-slate-600 underline cursor-pointer">Deselect all</button>
           </div>
         )}

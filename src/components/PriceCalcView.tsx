@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { useRowSelection } from '../hooks/useRowSelection';
+import { PasteIntoRows } from './PasteIntoRows';
+import { parseFlexibleNumber } from '../utils/supplierQuoteParser';
 import { ArrowRight, Building2, Lock } from 'lucide-react';
 import { MARKUP_RATES } from '../constants/themes';
 import {
@@ -531,6 +533,19 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
               >
                 Clear box size
               </button>
+              <PasteIntoRows
+                disabled={isIssued}
+                rowIds={rowSel.selected}
+                fields={[
+                  { key: 'supplierUnitCost', label: 'Supplier cost', parse: (raw: string) => parseFlexibleNumber(raw) ?? undefined },
+                  { key: 'boxes', label: 'Boxes', parse: (raw: string) => parseFlexibleNumber(raw) ?? undefined },
+                  { key: 'boxLengthCm', label: 'Box L (cm)', parse: (raw: string) => parseFlexibleNumber(raw) ?? undefined },
+                  { key: 'boxWidthCm', label: 'Box W (cm)', parse: (raw: string) => parseFlexibleNumber(raw) ?? undefined },
+                  { key: 'boxHeightCm', label: 'Box H (cm)', parse: (raw: string) => parseFlexibleNumber(raw) ?? undefined },
+                  { key: 'kgPerBox', label: 'Kg per box', parse: (raw: string) => parseFlexibleNumber(raw) ?? undefined },
+                ]}
+                onApply={(key, pairs) => pairs.forEach((p) => guardItem(p.rowId, { [key]: p.value } as Partial<JobItemRow>))}
+              />
               <button type="button" onClick={rowSel.clear} className="ml-auto text-slate-600 underline cursor-pointer">
                 Deselect all
               </button>
