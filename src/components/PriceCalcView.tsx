@@ -1,5 +1,5 @@
 import React from 'react';
-import { Lock } from 'lucide-react';
+import { ArrowRight, Building2, Lock } from 'lucide-react';
 import { MARKUP_RATES } from '../constants/themes';
 import {
   ConfirmDialogRequest,
@@ -11,6 +11,7 @@ import {
   PlatformMode,
   ProcurementJob,
   ThemePalette,
+  WorkspaceTab,
 } from '../types/procurement';
 import { formatMoney, formatNumber, formatPct } from '../utils/calculations';
 import { HelpTip } from './HelpTip';
@@ -24,6 +25,7 @@ interface PriceCalcViewProps {
   onUpdateItem: (rowNumber: number, patch: Partial<JobItemRow>) => void;
   onUpdateFreight: (patch: Partial<FreightConfig>) => void;
   onUpdateControls: (patch: Partial<JobControls>) => void;
+  onNavigateTab?: (tab: WorkspaceTab) => void;
   onRequestConfirm?: (req: ConfirmDialogRequest) => void;
 }
 
@@ -42,6 +44,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
   onUpdateItem,
   onUpdateFreight,
   onUpdateControls,
+  onNavigateTab,
   onRequestConfirm,
 }) => {
   const curr = job.controls.currency;
@@ -51,6 +54,9 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
   const includeVat = job.controls.includeVat !== false;
   const vatRateDisplay = Math.round((job.controls.vatRate * 100 + Number.EPSILON) * 100) / 100;
   const effectiveVat = calc.effectiveVatRate;
+  const supName = job.supplierQuote?.supplierName || job.controls.supplierName;
+  const supRef = job.supplierQuote?.supplierQuoteRef || job.controls.supplierRef;
+  const supTerms = job.supplierQuote?.paymentTerms || '';
 
   return (
     <div className="space-y-6">
@@ -59,13 +65,59 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
         <div className="flex items-center gap-2 text-sm text-red-900">
           <Lock className="w-4 h-4 text-red-700 shrink-0" />
           <span className="font-semibold">Internal Cost Sheet (PRICE CALC)</span>
-          <HelpTip text="Holds confidential supplier costs, markup scenarios, and internal VAT provision. Automatically excluded from all customer-facing exports (PI, QT, CI, PL, DN)." />
+          <HelpTip text="Holds confidential supplier costs, markup scenarios, and internal VAT provision. Automatically excluded from all customer-facing exports (QT, PI, CI, PL, DN)." />
         </div>
         <div className="text-xs text-red-800 font-mono-tabular">
           {effectiveVat > 0
             ? `Unit Price = Cost × (1 + Markup) × (1 + ${formatPct(effectiveVat)} VAT)`
             : 'Unit Price = Cost × (1 + Markup) · VAT Off'}
         </div>
+      </div>
+
+      {/* Linked Internal Supplier Quote Strip */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 sm:px-5 py-3">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 min-w-0">
+          <Building2 className="w-4 h-4 text-slate-500 shrink-0" />
+          <span className="font-semibold text-slate-900">
+            Supplier Quote: {supName || 'Not Entered Yet'}
+          </span>
+          {supRef && (
+            <>
+              <span className="text-slate-300">·</span>
+              <span className="font-mono-tabular">Ref {supRef}</span>
+            </>
+          )}
+          {supTerms && (
+            <>
+              <span className="text-slate-300">·</span>
+              <span className="truncate max-w-[260px]">{supTerms}</span>
+            </>
+          )}
+          <span className="text-slate-300">·</span>
+          <span className="font-mono-tabular font-semibold text-slate-800">
+            Total Supplier Cost: {formatMoney(calc.totalSupplierCost, curr)}
+          </span>
+        </div>
+        {onNavigateTab && (
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => onNavigateTab('INTERNAL_QUOTE')}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-800 cursor-pointer transition-colors whitespace-nowrap"
+            >
+              <span>Edit Internal Quote</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigateTab('QT')}
+              className="inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 cursor-pointer transition-opacity whitespace-nowrap"
+              style={{ backgroundColor: theme.primary }}
+            >
+              <span>Go to Quotation</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Controls Strip: Markup Selector (E3) + Internal VAT Toggle (E4) + Freight Rates */}

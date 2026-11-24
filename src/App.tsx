@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
+  Building2,
   Calculator,
   FileSpreadsheet,
   FileText,
   FolderOpen,
   Hash,
+  LayoutDashboard,
   Menu,
   Monitor,
   Package,
@@ -23,17 +25,21 @@ import { ConfirmDialog } from './components/ConfirmDialog';
 import { DocumentWorkspaceView } from './components/DocumentWorkspaceView';
 import { ExcelStudioView } from './components/ExcelStudioView';
 import { FilesHubView } from './components/FilesHubView';
-import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButton';
+import { InternalQuoteView } from './components/InternalQuoteView';
+import { JobTrackerDashboard } from './components/JobTrackerDashboard';
+import { OfflineIndicator } from './components/PWAInstallButton';
 import { PriceCalcView } from './components/PriceCalcView';
 import { RegistryView } from './components/RegistryView';
 import { QuoteApplyOptions, SupplierQuoteImportModal } from './components/SupplierQuoteImportModal';
 import {
   createBlankJob,
   createDefaultCompanyProfile,
+  createDefaultWorkflow,
   formatDocNumber,
   getNextSequenceNumber,
   loadActiveJobId,
   loadCompanyProfile,
+  loadDashboardPrefs,
   loadJobsWithHealth,
   loadRegistryWithHealth,
   loadThemeCustomization,
@@ -45,6 +51,7 @@ import {
   safeDeepClone,
   saveActiveJobId,
   saveCompanyProfile,
+  saveDashboardPrefs,
   saveJobs,
   saveRegistry,
   saveThemeCustomization,
@@ -54,13 +61,17 @@ import {
   CompanyProfile,
   ConfirmDialogRequest,
   CustomColumnDef,
+  DashboardPreferences,
   DocPrefix,
   FreightConfig,
+  InquiryType,
   JobControls,
   JobItemRow,
+  JobWorkflowState,
   PlatformMode,
   ProcurementJob,
   RegistryEntry,
+  SupplierQuoteData,
   ThemeCustomization,
   ThemeVariantId,
   WorkspaceTab,
@@ -71,13 +82,15 @@ import { detectDefaultPlatform, savePlatformMode } from './utils/platform';
 import { ParsedSupplierQuote, parseSupplierPdfFile } from './utils/supplierQuoteParser';
 
 const TAB_LABELS: Record<WorkspaceTab, string> = {
-  PI: 'Proforma Invoice (Entry)',
+  TRACKER: 'Dashboard',
+  INTERNAL_QUOTE: 'Internal Supplier Quote',
   PRICE_CALC: 'Price Calc (Internal)',
-  QT: 'Quotation (QT)',
+  QT: 'Quotation (Master Controls)',
+  PI: 'Proforma Invoice (PI)',
   PO: 'Supplier PO (PO)',
+  CI: 'Commercial Invoice (CI)',
   PL: 'Packing List (PL)',
   DN: 'Delivery Note (DN)',
-  CI: 'Commercial Invoice (CI)',
   REGISTRY: 'Master Registry',
   FILES: 'Import & Export',
   STUDIO: 'Clients & Settings',
@@ -105,8 +118,11 @@ export default function App() {
     loadThemeCustomization()
   );
   const [company, setCompany] = useState<CompanyProfile>(() => loadCompanyProfile());
+  const [dashboardPrefs, setDashboardPrefs] = useState<DashboardPreferences>(() =>
+    loadDashboardPrefs()
+  );
   const [platformMode, setPlatformMode] = useState<PlatformMode>(() => detectDefaultPlatform());
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>('PI');
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('TRACKER');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(
     startup.recovered
@@ -123,7 +139,7 @@ export default function App() {
   );
 
   const calc = useMemo(() => calculateJob(activeJob), [activeJob]);
-  const nextSeq = useMemo(() => getNextSequenceNumber(registry), [registry]);
+  const nextSeq = useMemo(() => getNextSequenceNumber(registry, jobs), [registry, jobs]);
   const theme = useMemo(
     () => resolveThemePalette(themeId, themeCustomization),
     [themeId, themeCustomization]
@@ -157,6 +173,7 @@ export default function App() {
   }, [company]);
 
   useEffect(() => savePlatformMode(platformMode), [platformMode]);
+  useEffect(() => saveDashboardPrefs(dashboardPrefs), [dashboardPrefs]);
   useEffect(() => {
     if (activeJob?.id) saveActiveJobId(activeJob.id);
   }, [activeJob?.id]);
@@ -181,11 +198,47 @@ export default function App() {
     mutateActiveJob((j) => ({ ...j, jobName: name }));
   };
 
+  const handleUpdateInquiryType = (inquiryType: InquiryType) => {
+    mutateActiveJob((j) => ({ ...j, inquiryType }));
+  };
+
   const handleUpdateControls = (patch: Partial<JobControls>) => {
     mutateActiveJob((j) => ({
       ...j,
       controls: { ...j.controls, ...patch },
     }));
+  };
+
+  const handleUpdateSupplierQuote = (patch: Partial<SupplierQuoteData>) => {
+    mutateActiveJob((j) => {
+      const nextSq = { ...j.supplierQuote, ...patch };
+      const nextControls = { ...j.controls };
+      if (patch.supplierName !== undefined) nextControls.supplierName = patch.supplierName;
+      if (patch.supplierAddress !== undefined) nextControls.supplierAddress = patch.supplierAddress;
+      if (patch.supplierQuoteRef !== undefined) nextControls.supplierRef = patch.supplierQuoteRef;
+      return {
+        ...j,
+        supplierQuote: nextSq,
+        controls: nextControls,
+      };
+    });
+  };
+
+  const handleUpdateWorkflow = (patch: Partial<JobWorkflowState>) => {
+    mutateActiveJob((j) => ({
+      ...j,
+      workflow: { ...j.workflow, ...patch },
+    }));
+  };
+
+  const handleUpdateDashboardPrefs = (patch: Partial<DashboardPreferences>) => {
+    setDashboardPrefs((prev) => ({ ...prev, ...patch }));
+  };
+
+  const handleSelectJobAndTab = (jobId: string, tab: WorkspaceTab) => {
+    setActiveJobId(jobId);
+    setActiveTab(tab);
+    setSidebarOpen(false);
   };
 
   const handleUpdateFreight = (patch: Partial<FreightConfig>) => {
@@ -227,9 +280,9 @@ export default function App() {
     const fresh = createBlankJob(`Procurement Job #${num}`, company);
     setJobs((prev) => [fresh, ...prev]);
     setActiveJobId(fresh.id);
-    setActiveTab('PI');
+    setActiveTab('QT');
     setSidebarOpen(false);
-    showToast(`Created fresh job from template: ${fresh.jobName}`);
+    showToast(`Created fresh job: ${fresh.jobName}`);
   };
 
   const handleDuplicateAsNewJob = () => {
@@ -239,12 +292,15 @@ export default function App() {
       jobName: `${activeJob.jobName} (Revision)`,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      jobSequence: undefined,
+      jobSequenceYear: undefined,
+      workflow: createDefaultWorkflow(),
       issuedDocs: {},
     };
     setJobs((prev) => [copy, ...prev]);
     setActiveJobId(copy.id);
-    setActiveTab('PI');
-    showToast(`Created unlocked revision job: ${copy.jobName}`);
+    setActiveTab('QT');
+    showToast(`Created unlocked revision job: ${copy.jobName} (will receive a new sequence when issued)`);
   };
 
   const handleDeleteCurrentJob = () => {
@@ -273,15 +329,26 @@ export default function App() {
   };
 
   const handleIssueDocument = (prefix: DocPrefix) => {
-    const seq = getNextSequenceNumber(registry);
-    const year = new Date().getFullYear();
+    // Per-Job Shared Sequence Rule:
+    // First issued doc on a job claims the next sequence number (e.g. 001).
+    // Every subsequent document in the SAME job reuses that sequence number, changing ONLY the prefix.
+    const hasAssignedSeq =
+      typeof activeJob.jobSequence === 'number' && activeJob.jobSequence > 0;
+    const seq = hasAssignedSeq
+      ? activeJob.jobSequence!
+      : getNextSequenceNumber(registry, jobs);
+    const year =
+      hasAssignedSeq && activeJob.jobSequenceYear
+        ? activeJob.jobSequenceYear
+        : new Date().getFullYear();
     const docNumber = formatDocNumber(prefix, seq, year);
     const now = new Date().toISOString();
 
+    const counterpartyRole = prefix === 'PO' ? 'SUPPLIER' : 'CLIENT';
     const partyName =
       prefix === 'PO'
         ? activeJob.controls.supplierName || 'Supplier'
-        : getResolvedEndUser(activeJob) || 'Customer';
+        : getResolvedEndUser(activeJob) || 'Client';
     const docAmount =
       prefix === 'PO'
         ? calc.totalSupplierCost
@@ -297,6 +364,8 @@ export default function App() {
       jobId: activeJob.id,
       jobName: activeJob.jobName,
       customer: partyName,
+      counterpartyRole,
+      rfqRef: activeJob.controls.rfqRef || '',
       currency: activeJob.controls.currency,
       amount: docAmount,
       issuedBy: activeJob.preparedBy || 'Procurement Desk',
@@ -305,53 +374,94 @@ export default function App() {
     };
 
     setRegistry((prev) => [...prev, newRegEntry]);
-    mutateActiveJob((j) => ({
-      ...j,
-      issuedDocs: {
-        ...j.issuedDocs,
-        [prefix]: {
-          prefix,
-          docNumber,
-          sequence: seq,
-          issuedAt: now,
-          issuedBy: j.preparedBy || 'Procurement Desk',
-          frozenSubtotal: calc.goodsSubtotal,
-          frozenVat: calc.vatAmount,
-          frozenFreight: calc.customerFreight,
-          frozenGrandTotal: calc.grandTotal,
-        },
-      },
-    }));
+    mutateActiveJob((j) => {
+      let nextControls = j.controls;
+      let nextItems = j.items;
+      let nextWorkflow = j.workflow;
 
-    showToast(`Claimed ${docNumber} from Master Registry and froze document.`);
+      // Stage 4: Issuing Packing List automatically populates Delivery Note shipment defaults (DN still issued manually)
+      if (prefix === 'PL') {
+        nextControls = {
+          ...j.controls,
+          deliveryDate: j.controls.deliveryDate.trim() || j.controls.shipDate || now.slice(0, 10),
+        };
+        nextItems = j.items.map((item, idx) => {
+          const comp = calc.rows[idx];
+          if (!comp || comp.isEmpty) return item;
+          return {
+            ...item,
+            grossWtKg: item.grossWtKg ?? comp.grossKgCalc,
+          };
+        });
+      }
+
+      return {
+        ...j,
+        jobSequence: seq,
+        jobSequenceYear: year,
+        controls: nextControls,
+        items: nextItems,
+        workflow: nextWorkflow,
+        issuedDocs: {
+          ...j.issuedDocs,
+          [prefix]: {
+            prefix,
+            docNumber,
+            sequence: seq,
+            issuedAt: now,
+            issuedBy: j.preparedBy || 'Procurement Desk',
+            frozenSubtotal: calc.goodsSubtotal,
+            frozenVat: calc.vatAmount,
+            frozenFreight: calc.customerFreight,
+            frozenGrandTotal: calc.grandTotal,
+          },
+        },
+      };
+    });
+
+    if (prefix === 'PL') {
+      showToast(
+        `Issued ${docNumber} (Job Seq #${String(seq).padStart(3, '0')}). Delivery Note populated and ready for manual issue.`
+      );
+    } else if (!hasAssignedSeq) {
+      showToast(
+        `Issued ${docNumber} — Job Seq #${String(seq).padStart(3, '0')} locked for all documents in this job.`
+      );
+    } else {
+      showToast(`Issued ${docNumber} sharing Job Seq #${String(seq).padStart(3, '0')}.`);
+    }
   };
 
-  const handleVoidRegistryEntry = (sequence: number, reason: string) => {
+  const handleVoidRegistryEntry = (docNumber: string, reason: string) => {
     setRegistry((prev) =>
       prev.map((e) =>
-        e.sequence === sequence ? { ...e, status: 'VOID', voidReason: reason } : e
+        e.docNumber === docNumber ? { ...e, status: 'VOID', voidReason: reason } : e
       )
     );
     setJobs((prev) =>
       prev.map((j) => {
         const nextIssued = { ...j.issuedDocs };
+        let changed = false;
         (Object.keys(nextIssued) as DocPrefix[]).forEach((p) => {
-          if (nextIssued[p]?.sequence === sequence) {
+          if (nextIssued[p]?.docNumber === docNumber) {
             nextIssued[p] = { ...nextIssued[p]!, isVoided: true };
+            changed = true;
           }
         });
-        return { ...j, issuedDocs: nextIssued };
+        return changed ? { ...j, issuedDocs: nextIssued } : j;
       })
     );
-    showToast(`Marked sequence #${sequence} as VOID. Number permanently retired.`);
+    showToast(`Marked ${docNumber} as VOID. Document number permanently retired.`);
   };
 
   const handleSyncRegistry = (incoming: RegistryEntry[]) => {
     setRegistry((prev) => {
-      const bySeq = new Map<number, RegistryEntry>();
-      prev.forEach((e) => bySeq.set(e.sequence, e));
-      incoming.forEach((e) => bySeq.set(e.sequence, e));
-      return Array.from(bySeq.values()).sort((a, b) => a.sequence - b.sequence);
+      const byDoc = new Map<string, RegistryEntry>();
+      prev.forEach((e) => byDoc.set(e.docNumber, e));
+      incoming.forEach((e) => byDoc.set(e.docNumber, e));
+      return Array.from(byDoc.values()).sort(
+        (a, b) => a.sequence - b.sequence || a.docNumber.localeCompare(b.docNumber)
+      );
     });
   };
 
@@ -359,7 +469,7 @@ export default function App() {
     const normalized = normalizeJob(imported);
     setJobs((prev) => [normalized, ...prev]);
     setActiveJobId(normalized.id);
-    setActiveTab('PI');
+    setActiveTab('QT');
   };
 
   const handleApplySupplierQuote = (
@@ -415,6 +525,16 @@ export default function App() {
         ...base,
         updatedAt: new Date().toISOString(),
         customColumns: nextCols,
+        supplierQuote: {
+          ...base.supplierQuote,
+          supplierName: quote.supplierName || base.supplierQuote.supplierName,
+          supplierQuoteRef: quote.supplierRef || base.supplierQuote.supplierQuoteRef,
+          quoteDate: base.supplierQuote.quoteDate || new Date().toISOString().slice(0, 10),
+          currency: quote.currency || base.supplierQuote.currency,
+          incoterm: quote.incoterm || base.supplierQuote.incoterm,
+          paymentTerms: quote.paymentTerms || base.supplierQuote.paymentTerms,
+          deliveryLeadTime: quote.deliveryLeadTime || base.supplierQuote.deliveryLeadTime,
+        },
         controls: {
           ...base.controls,
           supplierName: quote.supplierName || base.controls.supplierName,
@@ -442,9 +562,9 @@ export default function App() {
     }
 
     setPendingSupplierQuote(null);
-    setActiveTab('PRICE_CALC');
+    setActiveTab('INTERNAL_QUOTE');
     showToast(
-      `Loaded ${selectedItems.length} supplier quote items into Price Calc (${quote.currency}).`
+      `Loaded ${selectedItems.length} supplier quote items into Internal Quote & Price Calc (${quote.currency}).`
     );
   };
 
@@ -513,17 +633,19 @@ export default function App() {
       prevJobs.map((job) => ({
         ...job,
         updatedAt: new Date().toISOString(),
+        jobSequence: undefined,
+        jobSequenceYear: undefined,
         issuedDocs: {},
       }))
     );
-    showToast('Master Registry reset to 0. Next document will start at #001.');
+    showToast('Master Registry reset to 0. Next issued job will start at Seq #001.');
   };
 
   const handleResetCompany = () => {
     const defaults = createDefaultCompanyProfile();
     saveCompanyProfile(defaults);
     setCompany(defaults);
-    showToast('Reset company branding, logo, and End-User list to defaults.');
+    showToast('Reset company branding, logo, and Client Directory to defaults.');
   };
 
   const handleUpdateThemeCustomization = (patch: Partial<ThemeCustomization>) => {
@@ -544,7 +666,8 @@ export default function App() {
     restoredRegistry: RegistryEntry[],
     restoredCompany?: CompanyProfile,
     restoredThemeId?: ThemeVariantId,
-    restoredThemeCustom?: ThemeCustomization
+    restoredThemeCustom?: ThemeCustomization,
+    restoredDashPrefs?: DashboardPreferences
   ) => {
     if (restoredJobs.length > 0) {
       const normalized = restoredJobs.map((j) => normalizeJob(j));
@@ -552,9 +675,7 @@ export default function App() {
       setActiveJobId(normalized[0].id);
     }
     const cleanReg = normalizeRegistryEntries(restoredRegistry);
-    if (cleanReg.length > 0) {
-      setRegistry(cleanReg);
-    }
+    setRegistry(cleanReg);
     if (restoredCompany) {
       const normCompany = normalizeCompanyProfile(restoredCompany);
       saveCompanyProfile(normCompany);
@@ -568,6 +689,10 @@ export default function App() {
       saveThemeCustomization(normCustom);
       setThemeCustomization(normCustom);
     }
+    if (restoredDashPrefs) {
+      saveDashboardPrefs(restoredDashPrefs);
+      setDashboardPrefs(restoredDashPrefs);
+    }
   };
 
   const navItems: {
@@ -575,24 +700,31 @@ export default function App() {
     items: { id: WorkspaceTab; label: string; icon: React.ReactNode; docPrefix?: DocPrefix }[];
   }[] = [
     {
-      group: 'Entry & Costing',
+      group: 'Overview',
       items: [
-        { id: 'PI', label: 'Proforma Invoice', icon: <FileText className="w-4 h-4" />, docPrefix: 'PI' },
+        { id: 'TRACKER', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
+      ],
+    },
+    {
+      group: 'Internal Costing',
+      items: [
+        { id: 'INTERNAL_QUOTE', label: 'Internal Quote', icon: <Building2 className="w-4 h-4" /> },
         { id: 'PRICE_CALC', label: 'Price Calc (Internal)', icon: <Calculator className="w-4 h-4" /> },
       ],
     },
     {
       group: 'Trade Documents',
       items: [
-        { id: 'QT', label: 'Quotation', icon: <FileText className="w-4 h-4" />, docPrefix: 'QT' },
+        { id: 'QT', label: 'Quotation (Master)', icon: <FileText className="w-4 h-4" />, docPrefix: 'QT' },
+        { id: 'PI', label: 'Proforma Invoice', icon: <FileText className="w-4 h-4" />, docPrefix: 'PI' },
         { id: 'PO', label: 'Supplier PO', icon: <ShoppingCart className="w-4 h-4" />, docPrefix: 'PO' },
+        { id: 'CI', label: 'Commercial Invoice', icon: <Receipt className="w-4 h-4" />, docPrefix: 'CI' },
         { id: 'PL', label: 'Packing List', icon: <Package className="w-4 h-4" />, docPrefix: 'PL' },
         { id: 'DN', label: 'Delivery Note', icon: <Truck className="w-4 h-4" />, docPrefix: 'DN' },
-        { id: 'CI', label: 'Commercial Invoice', icon: <Receipt className="w-4 h-4" />, docPrefix: 'CI' },
       ],
     },
     {
-      group: 'Files & Settings',
+      group: 'Ledger & Settings',
       items: [
         { id: 'REGISTRY', label: 'Master Registry', icon: <Hash className="w-4 h-4" /> },
         { id: 'FILES', label: 'Import & Export', icon: <ArrowLeftRight className="w-4 h-4" /> },
@@ -743,14 +875,6 @@ export default function App() {
             </div>
           ))}
         </nav>
-
-        {/* Sidebar Footer: Offline PWA Install */}
-        <div className="p-4 border-t border-slate-200 space-y-2">
-          <PWAInstallButton />
-          <div className="text-[11px] text-slate-400 text-center font-mono-tabular">
-            Next Registry Seq · #{String(nextSeq).padStart(3, '0')}
-          </div>
-        </div>
       </aside>
 
       {/* Main Content Shell */}
@@ -850,7 +974,7 @@ export default function App() {
         {platformMode === 'ipad' && isDocTab(activeTab) && (
           <div className="no-print border-b border-slate-200 bg-white px-4 py-2 overflow-x-auto">
             <div className="flex items-center gap-1.5 min-w-max">
-              {(['PI', 'QT', 'PO', 'PL', 'DN', 'CI'] as DocPrefix[]).map((doc) => {
+              {(['QT', 'PI', 'PO', 'CI', 'PL', 'DN'] as DocPrefix[]).map((doc) => {
                 const isSelected = activeTab === doc;
                 const issuedInfo = activeJob.issuedDocs[doc];
                 return (
@@ -876,6 +1000,36 @@ export default function App() {
 
         {/* Active Viewport Content */}
         <main className={`flex-1 p-4 sm:p-6 max-w-[1440px] w-full mx-auto ${platformMode === 'ipad' ? 'pb-24' : ''}`}>
+          {activeTab === 'TRACKER' && (
+            <JobTrackerDashboard
+              jobs={jobs}
+              activeJobId={activeJob.id}
+              registry={registry}
+              theme={theme}
+              company={company}
+              prefs={dashboardPrefs}
+              onUpdatePrefs={handleUpdateDashboardPrefs}
+              onSelectJobAndTab={handleSelectJobAndTab}
+              onCreateNewJob={handleCreateNewJob}
+              onNotify={showToast}
+            />
+          )}
+
+          {activeTab === 'INTERNAL_QUOTE' && (
+            <InternalQuoteView
+              job={activeJob}
+              calc={calc}
+              theme={theme}
+              onUpdateSupplierQuote={handleUpdateSupplierQuote}
+              onUpdateControls={handleUpdateControls}
+              onUpdateItem={handleUpdateItem}
+              onOpenImportFile={() => quickImportRef.current?.click()}
+              onNavigateTab={setActiveTab}
+              onRequestConfirm={setConfirmDialog}
+              onNotify={showToast}
+            />
+          )}
+
           {isDocTab(activeTab) && (
             <DocumentWorkspaceView
               key={`${activeJob.id}-${activeTab}`}
@@ -885,8 +1039,11 @@ export default function App() {
               theme={theme}
               company={company}
               platformMode={platformMode}
+              nextNewJobSeq={nextSeq}
               onUpdateJobName={handleUpdateJobName}
+              onUpdateInquiryType={handleUpdateInquiryType}
               onUpdateControls={handleUpdateControls}
+              onUpdateWorkflow={handleUpdateWorkflow}
               onUpdateCustomColumns={handleUpdateCustomColumns}
               onUpdateColumnOrder={handleUpdateColumnOrder}
               onUpdateItem={handleUpdateItem}
@@ -907,6 +1064,7 @@ export default function App() {
               onUpdateItem={handleUpdateItem}
               onUpdateFreight={handleUpdateFreight}
               onUpdateControls={handleUpdateControls}
+              onNavigateTab={setActiveTab}
               onRequestConfirm={setConfirmDialog}
             />
           )}
@@ -934,6 +1092,7 @@ export default function App() {
               theme={theme}
               themeCustomization={themeCustomization}
               company={company}
+              dashboardPrefs={dashboardPrefs}
               onImportJob={handleImportJob}
               onOpenSupplierQuote={setPendingSupplierQuote}
               onSyncRegistry={handleSyncRegistry}
@@ -987,11 +1146,11 @@ export default function App() {
         >
           <div className="max-w-2xl mx-auto grid grid-cols-5 gap-1">
             {[
-              { id: 'PI' as WorkspaceTab, label: 'Entry / PI', icon: <FileText className="w-5 h-5" />, active: activeTab === 'PI' },
+              { id: 'TRACKER' as WorkspaceTab, label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" />, active: activeTab === 'TRACKER' },
+              { id: 'INTERNAL_QUOTE' as WorkspaceTab, label: 'Int. Quote', icon: <Building2 className="w-5 h-5" />, active: activeTab === 'INTERNAL_QUOTE' },
+              { id: 'QT' as WorkspaceTab, label: 'Docs', icon: <Receipt className="w-5 h-5" />, active: isDocTab(activeTab) },
               { id: 'PRICE_CALC' as WorkspaceTab, label: 'Price Calc', icon: <Calculator className="w-5 h-5" />, active: activeTab === 'PRICE_CALC' },
-              { id: 'QT' as WorkspaceTab, label: 'Docs', icon: <Receipt className="w-5 h-5" />, active: ['QT', 'PO', 'PL', 'DN', 'CI'].includes(activeTab) },
-              { id: 'FILES' as WorkspaceTab, label: 'Files', icon: <ArrowLeftRight className="w-5 h-5" />, active: activeTab === 'FILES' },
-              { id: 'STUDIO' as WorkspaceTab, label: 'Settings', icon: <Settings className="w-5 h-5" />, active: activeTab === 'STUDIO' },
+              { id: 'REGISTRY' as WorkspaceTab, label: 'Registry', icon: <Hash className="w-5 h-5" />, active: activeTab === 'REGISTRY' },
             ].map((item) => (
               <button
                 key={item.id}

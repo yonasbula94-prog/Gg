@@ -1,6 +1,7 @@
 import defaultLogoUrl from '../assets/grand-group-logo.png?inline';
 import {
   COMPANY_INFO,
+  DEFAULT_DASHBOARD_PREFS,
   DEFAULT_END_USER_ADDRESSES,
   DOCUMENT_FONT_OPTIONS,
   END_USER_OPTIONS,
@@ -9,12 +10,16 @@ import {
   CompanyProfile,
   CustomColumnDef,
   CustomColumnPosition,
+  DashboardPreferences,
   DocPrefix,
   DocumentFontId,
+  InquiryType,
   IssuedDocRecord,
   JobItemRow,
+  JobWorkflowState,
   ProcurementJob,
   RegistryEntry,
+  SupplierQuoteData,
   ThemeCustomization,
   ThemeVariantId,
 } from '../types/procurement';
@@ -27,6 +32,7 @@ export const STORAGE_KEYS = {
   ACTIVE_JOB: 'gg_fzc_active_job_id_v1',
   COMPANY: 'gg_fzc_company_profile_v1',
   ADMIN_PASS: 'gg_fzc_admin_pass_v1',
+  DASHBOARD_PREFS: 'gg_fzc_dashboard_prefs_v1',
 };
 
 export const DEFAULT_ADMIN_PASSWORD = 'GGAdmin2026';
@@ -272,6 +278,41 @@ export function createEmptyItems(): JobItemRow[] {
   }));
 }
 
+export function createDefaultSupplierQuote(): SupplierQuoteData {
+  return {
+    supplierName: '',
+    supplierContact: '',
+    supplierAddress: '',
+    supplierEmail: '',
+    supplierQuoteRef: '',
+    quoteDate: new Date().toISOString().slice(0, 10),
+    validUntil: '',
+    currency: 'USD',
+    incoterm: 'EXW',
+    paymentTerms: '100% TT Prior to Dispatch',
+    deliveryLeadTime: '2–3 Weeks from Order',
+    notes: '',
+  };
+}
+
+export function createDefaultWorkflow(): JobWorkflowState {
+  return {
+    endUserPoConfirmed: false,
+    supplierPaidConfirmed: false,
+    supplierPaymentRef: '',
+    supplierPackingListReceived: false,
+    supplierPackingListRef: '',
+  };
+}
+
+export function inferInquiryType(rfqRef?: string): InquiryType {
+  const s = (rfqRef || '').toLowerCase();
+  if (s.includes('tender') || s.includes('tnd') || s.includes('itb') || s.includes('rfp')) {
+    return 'TENDER';
+  }
+  return 'RFQ';
+}
+
 export function createBlankJob(name?: string, company?: CompanyProfile): ProcurementJob {
   const now = new Date().toISOString();
   const id = `job-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -285,6 +326,7 @@ export function createBlankJob(name?: string, company?: CompanyProfile): Procure
   return {
     id,
     jobName: name || 'Procurement Job #1',
+    inquiryType: 'RFQ',
     createdAt: now,
     updatedAt: now,
     preparedBy: 'Procurement Desk',
@@ -312,8 +354,10 @@ export function createBlankJob(name?: string, company?: CompanyProfile): Procure
       receivedBy: '',
       remarks: 'All items supplied in original manufacturer export-grade packaging.',
       authorizedSignatory: 'Authorized Signature — GRAND GROUP FZC',
-      counterpartySignatory: 'Customer / Supplier Acknowledgment',
+      counterpartySignatory: 'Client / Supplier Acknowledgment',
     },
+    supplierQuote: createDefaultSupplierQuote(),
+    workflow: createDefaultWorkflow(),
     freight: {
       ratePerCbm: 185,
       ratePerKg: 2.4,
@@ -426,9 +470,51 @@ export function normalizeJob(raw: unknown): ProcurementJob {
     }
   }
 
+  const rawSq = (src.supplierQuote && typeof src.supplierQuote === 'object'
+    ? src.supplierQuote
+    : {}) as Partial<SupplierQuoteData>;
+  const rawWf = (src.workflow && typeof src.workflow === 'object'
+    ? src.workflow
+    : {}) as Partial<JobWorkflowState>;
+
+  const supplierName = safeStr(rawCtrl.supplierName) || safeStr(rawSq.supplierName);
+  const supplierAddress = safeStr(rawCtrl.supplierAddress) || safeStr(rawSq.supplierAddress);
+  const supplierRef = safeStr(rawCtrl.supplierRef) || safeStr(rawSq.supplierQuoteRef);
+  const rfqRef = safeStr(rawCtrl.rfqRef);
+
+  let jobSequence: number | undefined =
+    typeof src.jobSequence === 'number' && Number.isFinite(src.jobSequence) && src.jobSequence > 0
+      ? Math.floor(src.jobSequence)
+      : undefined;
+  let jobSequenceYear: number | undefined =
+    typeof src.jobSequenceYear === 'number' &&
+    Number.isFinite(src.jobSequenceYear) &&
+    src.jobSequenceYear > 2000
+      ? Math.floor(src.jobSequenceYear)
+      : undefined;
+
+  if (jobSequence === undefined) {
+    const firstIssued = Object.values(issuedDocs).find((d) => d && d.sequence > 0);
+    if (firstIssued) {
+      jobSequence = firstIssued.sequence;
+      const yrMatch = firstIssued.docNumber.match(/(\d{4})$/);
+      jobSequenceYear = yrMatch ? Number(yrMatch[1]) : new Date().getFullYear();
+    }
+  }
+
+  const inquiryType: InquiryType =
+    src.inquiryType === 'TENDER' || src.inquiryType === 'RFQ'
+      ? src.inquiryType
+      : inferInquiryType(rfqRef);
+
+  const sqDefaults = createDefaultSupplierQuote();
+
   return {
     id: safeStr(src.id, fallback.id) || fallback.id,
     jobName: safeStr(src.jobName, fallback.jobName) || fallback.jobName,
+    jobSequence,
+    jobSequenceYear,
+    inquiryType,
     createdAt: safeStr(src.createdAt, fallback.createdAt),
     updatedAt: safeStr(src.updatedAt, fallback.updatedAt),
     preparedBy: safeStr(src.preparedBy, fallback.preparedBy),
@@ -444,11 +530,11 @@ export function normalizeJob(raw: unknown): ProcurementJob {
       vatRate,
       paymentTerms: safeStr(rawCtrl.paymentTerms, fallback.controls.paymentTerms),
       deliveryLeadTime: safeStr(rawCtrl.deliveryLeadTime, fallback.controls.deliveryLeadTime),
-      rfqRef: safeStr(rawCtrl.rfqRef),
+      rfqRef,
       customerPoRef: safeStr(rawCtrl.customerPoRef),
-      supplierName: safeStr(rawCtrl.supplierName),
-      supplierAddress: safeStr(rawCtrl.supplierAddress),
-      supplierRef: safeStr(rawCtrl.supplierRef),
+      supplierName,
+      supplierAddress,
+      supplierRef,
       shipDate: safeStr(rawCtrl.shipDate),
       portOfLoading: safeStr(rawCtrl.portOfLoading, fallback.controls.portOfLoading),
       deliveryDate: safeStr(rawCtrl.deliveryDate),
@@ -464,6 +550,44 @@ export function normalizeJob(raw: unknown): ProcurementJob {
         typeof rawCtrl.counterpartySignatory === 'string'
           ? rawCtrl.counterpartySignatory
           : fallback.controls.counterpartySignatory,
+    },
+    supplierQuote: {
+      supplierName,
+      supplierContact: safeStr(rawSq.supplierContact),
+      supplierAddress,
+      supplierEmail: safeStr(rawSq.supplierEmail),
+      supplierQuoteRef: supplierRef,
+      quoteDate: safeStr(rawSq.quoteDate, sqDefaults.quoteDate),
+      validUntil: safeStr(rawSq.validUntil),
+      currency: safeStr(rawSq.currency, safeStr(rawCtrl.currency, 'USD') || 'USD'),
+      incoterm: safeStr(rawSq.incoterm, sqDefaults.incoterm),
+      paymentTerms: safeStr(rawSq.paymentTerms, sqDefaults.paymentTerms),
+      deliveryLeadTime: safeStr(rawSq.deliveryLeadTime, sqDefaults.deliveryLeadTime),
+      notes: safeStr(rawSq.notes),
+    },
+    workflow: {
+      endUserPoConfirmed:
+        typeof rawWf.endUserPoConfirmed === 'boolean'
+          ? rawWf.endUserPoConfirmed
+          : Boolean(issuedDocs.PO || issuedDocs.CI),
+      endUserPoConfirmedAt:
+        typeof rawWf.endUserPoConfirmedAt === 'string' ? rawWf.endUserPoConfirmedAt : undefined,
+      supplierPaidConfirmed:
+        typeof rawWf.supplierPaidConfirmed === 'boolean'
+          ? rawWf.supplierPaidConfirmed
+          : Boolean(issuedDocs.PL || issuedDocs.DN),
+      supplierPaidConfirmedAt:
+        typeof rawWf.supplierPaidConfirmedAt === 'string'
+          ? rawWf.supplierPaidConfirmedAt
+          : undefined,
+      supplierPaymentRef: safeStr(rawWf.supplierPaymentRef),
+      supplierPackingListReceived:
+        typeof rawWf.supplierPackingListReceived === 'boolean'
+          ? rawWf.supplierPackingListReceived
+          : Boolean(issuedDocs.PL || issuedDocs.DN),
+      supplierPackingListRef: safeStr(rawWf.supplierPackingListRef),
+      supplierPackingListAt:
+        typeof rawWf.supplierPackingListAt === 'string' ? rawWf.supplierPackingListAt : undefined,
     },
     freight: {
       ratePerCbm: safeNullableNonNeg(rawFreight.ratePerCbm) ?? fallback.freight.ratePerCbm,
@@ -511,6 +635,8 @@ export function normalizeRegistryEntries(raw: unknown): RegistryEntry[] {
       jobId: safeStr(e.jobId, `reg-${e.sequence}`),
       jobName: safeStr(e.jobName, 'Untitled Job'),
       customer: safeStr(e.customer, '—'),
+      counterpartyRole: prefix === 'PO' ? 'SUPPLIER' : 'CLIENT',
+      rfqRef: safeStr(e.rfqRef, ''),
       currency: safeStr(e.currency, 'USD') || 'USD',
       amount: safeNullableNonNeg(e.amount) ?? 0,
       issuedBy: safeStr(e.issuedBy, 'Procurement Desk'),
@@ -615,9 +741,67 @@ export function saveActiveJobId(id: string): void {
   }
 }
 
-export function getNextSequenceNumber(entries: RegistryEntry[]): number {
-  const maxSeq = entries.reduce((max, e) => (e.sequence > max ? e.sequence : max), 0);
-  return maxSeq + 1;
+export function loadDashboardPrefs(): DashboardPreferences {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.DASHBOARD_PREFS);
+    if (!raw) return { ...DEFAULT_DASHBOARD_PREFS };
+    const parsed = JSON.parse(raw) as Partial<DashboardPreferences>;
+    if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_DASHBOARD_PREFS };
+    return {
+      showRfqTenderCounters:
+        typeof parsed.showRfqTenderCounters === 'boolean'
+          ? parsed.showRfqTenderCounters
+          : DEFAULT_DASHBOARD_PREFS.showRfqTenderCounters,
+      showCompletionFunnel:
+        typeof parsed.showCompletionFunnel === 'boolean'
+          ? parsed.showCompletionFunnel
+          : DEFAULT_DASHBOARD_PREFS.showCompletionFunnel,
+      showPerformanceChart:
+        typeof parsed.showPerformanceChart === 'boolean'
+          ? parsed.showPerformanceChart
+          : DEFAULT_DASHBOARD_PREFS.showPerformanceChart,
+      showPriorityRanking:
+        typeof parsed.showPriorityRanking === 'boolean'
+          ? parsed.showPriorityRanking
+          : DEFAULT_DASHBOARD_PREFS.showPriorityRanking,
+      showJobMatrix:
+        typeof parsed.showJobMatrix === 'boolean'
+          ? parsed.showJobMatrix
+          : DEFAULT_DASHBOARD_PREFS.showJobMatrix,
+      showFinancials:
+        typeof parsed.showFinancials === 'boolean'
+          ? parsed.showFinancials
+          : DEFAULT_DASHBOARD_PREFS.showFinancials,
+      includeCompleted:
+        typeof parsed.includeCompleted === 'boolean'
+          ? parsed.includeCompleted
+          : DEFAULT_DASHBOARD_PREFS.includeCompleted,
+      performancePeriod: parsed.performancePeriod === 'monthly' ? 'monthly' : 'weekly',
+      priorityMetric: parsed.priorityMetric === 'value' ? 'value' : 'profit',
+    };
+  } catch {
+    return { ...DEFAULT_DASHBOARD_PREFS };
+  }
+}
+
+export function saveDashboardPrefs(prefs: DashboardPreferences): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.DASHBOARD_PREFS, JSON.stringify(prefs));
+  } catch {
+    // Ignore prefs save error
+  }
+}
+
+export function getNextSequenceNumber(
+  entries: RegistryEntry[],
+  jobs: ProcurementJob[] = []
+): number {
+  const maxRegSeq = entries.reduce((max, e) => (e.sequence > max ? e.sequence : max), 0);
+  const maxJobSeq = jobs.reduce(
+    (max, j) => (j.jobSequence && j.jobSequence > max ? j.jobSequence : max),
+    0
+  );
+  return Math.max(maxRegSeq, maxJobSeq) + 1;
 }
 
 export function formatDocNumber(prefix: DocPrefix, sequence: number, year?: number): string {

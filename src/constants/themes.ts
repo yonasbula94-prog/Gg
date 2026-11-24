@@ -1,5 +1,6 @@
 import {
   CustomColumnDef,
+  DashboardPreferences,
   DocPrefix,
   DocumentFontId,
   MarkupRate,
@@ -7,6 +8,18 @@ import {
   ThemePalette,
   ThemeVariantId,
 } from '../types/procurement';
+
+export const DEFAULT_DASHBOARD_PREFS: DashboardPreferences = {
+  showRfqTenderCounters: true,
+  showCompletionFunnel: true,
+  showPerformanceChart: true,
+  showPriorityRanking: true,
+  showJobMatrix: true,
+  showFinancials: true,
+  includeCompleted: true,
+  performancePeriod: 'weekly',
+  priorityMetric: 'profit',
+};
 
 export const COMPANY_INFO = {
   name: 'GRAND GROUP FZC',
@@ -97,7 +110,7 @@ export const DOC_META: Record<
     title: 'QUOTATION',
     sheetName: 'QUOTATION',
     shortName: 'Quotation',
-    stageLabel: 'Customer Quote',
+    stageLabel: 'Master Entry · Customer Quote',
     recipientLabel: 'TO',
     isPricingDoc: true,
   },
@@ -106,7 +119,7 @@ export const DOC_META: Record<
     title: 'PROFORMA INVOICE',
     sheetName: 'PROFORMA INVOICE',
     shortName: 'Proforma Invoice',
-    stageLabel: 'Master Entry / PI',
+    stageLabel: 'Triggered by Quotation',
     recipientLabel: 'TO',
     isPricingDoc: true,
   },

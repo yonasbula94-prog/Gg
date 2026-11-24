@@ -1,5 +1,14 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Ban, FileSpreadsheet, RotateCcw, Search, Upload } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Ban,
+  FileSpreadsheet,
+  RotateCcw,
+  Search,
+  Upload,
+} from 'lucide-react';
 import { DOC_META } from '../constants/themes';
 import {
   CompanyProfile,
@@ -11,12 +20,22 @@ import {
 import { formatMoney } from '../utils/calculations';
 import { exportMasterRegistryXlsx, importWorkbookFromXlsx } from '../utils/excelEngine';
 
+type RegistrySortKey =
+  | 'sequence'
+  | 'docNumber'
+  | 'prefix'
+  | 'customer'
+  | 'jobName'
+  | 'rfqRef'
+  | 'amount'
+  | 'issuedAt';
+
 interface RegistryViewProps {
   entries: RegistryEntry[];
   nextSeq: number;
   theme: ThemePalette;
   company: CompanyProfile;
-  onVoidEntry: (sequence: number, reason: string) => void;
+  onVoidEntry: (docNumber: string, reason: string) => void;
   onSyncRegistryEntries: (entries: RegistryEntry[]) => void;
   onResetRegistry: () => void;
   onRequestConfirm: (req: ConfirmDialogRequest) => void;
@@ -37,29 +56,66 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
   const [search, setSearch] = useState('');
   const [prefixFilter, setPrefixFilter] = useState<'ALL' | DocPrefix>('ALL');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ISSUED' | 'VOID'>('ALL');
-  const [voidingSeq, setVoidingSeq] = useState<number | null>(null);
+  const [sortKey, setSortKey] = useState<RegistrySortKey>('sequence');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [voidingDoc, setVoidingDoc] = useState<string | null>(null);
   const [voidReason, setVoidReason] = useState('');
   const [exporting, setExporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const handleToggleSort = (key: RegistrySortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir(key === 'sequence' || key === 'issuedAt' || key === 'amount' ? 'desc' : 'asc');
+    }
+  };
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return [...entries]
-      .sort((a, b) => b.sequence - a.sequence)
-      .filter((e) => {
-        if (prefixFilter !== 'ALL' && e.prefix !== prefixFilter) return false;
-        if (statusFilter !== 'ALL' && e.status !== statusFilter) return false;
-        if (!q) return true;
-        return (
-          e.docNumber.toLowerCase().includes(q) ||
-          e.customer.toLowerCase().includes(q) ||
-          e.jobName.toLowerCase().includes(q)
-        );
-      });
-  }, [entries, search, prefixFilter, statusFilter]);
+    const list = entries.filter((e) => {
+      if (prefixFilter !== 'ALL' && e.prefix !== prefixFilter) return false;
+      if (statusFilter !== 'ALL' && e.status !== statusFilter) return false;
+      if (!q) return true;
+      return (
+        e.docNumber.toLowerCase().includes(q) ||
+        e.customer.toLowerCase().includes(q) ||
+        e.jobName.toLowerCase().includes(q) ||
+        (e.rfqRef || '').toLowerCase().includes(q) ||
+        DOC_META[e.prefix].shortName.toLowerCase().includes(q)
+      );
+    });
+
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...list].sort((a, b) => {
+      switch (sortKey) {
+        case 'sequence':
+          if (a.sequence !== b.sequence) return (a.sequence - b.sequence) * dir;
+          return a.docNumber.localeCompare(b.docNumber) * dir;
+        case 'docNumber':
+          return a.docNumber.localeCompare(b.docNumber) * dir;
+        case 'prefix':
+          return DOC_META[a.prefix].shortName.localeCompare(DOC_META[b.prefix].shortName) * dir;
+        case 'customer':
+          return a.customer.localeCompare(b.customer) * dir;
+        case 'jobName':
+          return a.jobName.localeCompare(b.jobName) * dir;
+        case 'rfqRef':
+          return (a.rfqRef || '').localeCompare(b.rfqRef || '') * dir;
+        case 'amount':
+          return (a.amount - b.amount) * dir;
+        case 'issuedAt':
+          return a.issuedAt.localeCompare(b.issuedAt) * dir;
+        default:
+          return 0;
+      }
+    });
+  }, [entries, search, prefixFilter, statusFilter, sortKey, sortDir]);
 
   const issuedCount = entries.filter((e) => e.status === 'ISSUED').length;
   const voidCount = entries.filter((e) => e.status === 'VOID').length;
+  const uniqueJobSequences = new Set(entries.map((e) => e.sequence)).size;
 
   const handleExportRegistry = async () => {
     setExporting(true);
@@ -92,18 +148,27 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
   };
 
   const confirmVoid = () => {
-    if (voidingSeq === null) return;
-    onVoidEntry(voidingSeq, voidReason.trim() || 'Voided by user');
-    setVoidingSeq(null);
+    if (!voidingDoc) return;
+    onVoidEntry(voidingDoc, voidReason.trim() || 'Voided by user');
+    setVoidingDoc(null);
     setVoidReason('');
+  };
+
+  const renderSortIcon = (key: RegistrySortKey) => {
+    if (sortKey !== key) return <ArrowUpDown className="w-3 h-3 opacity-55 shrink-0" />;
+    return sortDir === 'asc' ? (
+      <ArrowUp className="w-3 h-3 shrink-0" />
+    ) : (
+      <ArrowDown className="w-3 h-3 shrink-0" />
+    );
   };
 
   return (
     <div className="space-y-6">
-      {/* Summary Metrics Row (Clean flat grid, no nested cards) */}
+      {/* Summary Metrics Row */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
         <div className="rounded-lg border border-slate-200 bg-white p-4">
-          <div className="text-xs text-slate-500">Next Available Sequence</div>
+          <div className="text-xs text-slate-500">Next New Job Sequence</div>
           <div className="mt-1.5 text-2xl font-bold font-mono-tabular text-slate-900">
             #{String(nextSeq).padStart(3, '0')}
           </div>
@@ -112,40 +177,50 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
           </div>
         </div>
         <div className="rounded-lg border border-slate-200 bg-white p-4">
-          <div className="text-xs text-slate-500">Total Claimed</div>
-          <div className="mt-1.5 text-2xl font-bold font-mono-tabular text-slate-900">{entries.length}</div>
+          <div className="text-xs text-slate-500">Issued Documents</div>
+          <div className="mt-1.5 text-2xl font-bold font-mono-tabular text-slate-900">
+            {issuedCount}
+          </div>
           <div className="mt-1 text-xs text-slate-500">
-            {entries.length === 0 ? 'Starting fresh from #001' : 'Shared across all document types'}
+            {uniqueJobSequences === 0
+              ? 'Starting fresh from #001'
+              : `Across ${uniqueJobSequences} job sequence${uniqueJobSequences === 1 ? '' : 's'}`}
           </div>
         </div>
         <div className="rounded-lg border border-slate-200 bg-white p-4">
-          <div className="text-xs text-slate-500">Active Issued</div>
-          <div className="mt-1.5 text-2xl font-bold font-mono-tabular text-emerald-700">{issuedCount}</div>
-          <div className="mt-1 text-xs text-slate-500">Shared across 6 prefixes</div>
+          <div className="text-xs text-slate-500">Per-Job Sequence Rule</div>
+          <div className="mt-1.5 text-base font-bold font-mono-tabular text-emerald-700">
+            1 Job = 1 Sequence
+          </div>
+          <div className="mt-1 text-xs text-slate-500">
+            Prefix changes per doc (QT · PI · PO · CI · PL · DN)
+          </div>
         </div>
         <div className="rounded-lg border border-slate-200 bg-white p-4">
-          <div className="text-xs text-slate-500">Voided (Never Reused)</div>
-          <div className="mt-1.5 text-2xl font-bold font-mono-tabular text-red-700">{voidCount}</div>
-          <div className="mt-1 text-xs text-slate-500">Gaps allowed · Zero duplicates</div>
+          <div className="text-xs text-slate-500">Voided Records</div>
+          <div className="mt-1.5 text-2xl font-bold font-mono-tabular text-red-700">
+            {voidCount}
+          </div>
+          <div className="mt-1 text-xs text-slate-500">Audit trail preserved</div>
         </div>
       </div>
 
-      {/* Filter & Export Controls */}
+      {/* Filter, Sort & Export Controls */}
       <div className="rounded-lg border border-slate-200 bg-white p-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-[260px]">
-          <div className="relative flex-1 max-w-xs">
+          <div className="relative min-w-[210px] flex-1 max-w-xs">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search doc no., customer, job..."
-              className="w-full min-h-[40px] rounded-lg border border-slate-200 pl-9 pr-3 py-2 text-xs text-slate-900 focus:border-slate-900 focus:outline-none"
+              placeholder="Search doc no., client, job, RFQ..."
+              className="w-full min-h-[38px] rounded-lg border border-slate-200 pl-9 pr-3 py-1.5 text-xs text-slate-900 focus:border-slate-900 focus:outline-none"
             />
           </div>
 
           <div className="inline-flex items-center p-1 rounded-lg bg-slate-100">
-            {(['ALL', 'PI', 'QT', 'PO', 'PL', 'DN', 'CI'] as const).map((p) => (
+            {(['ALL', 'QT', 'PI', 'PO', 'CI', 'PL', 'DN'] as const).map((p) => (
               <button
                 key={p}
                 type="button"
@@ -177,6 +252,47 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
               </button>
             ))}
           </div>
+
+          {/* Explicit Sort Selector Dropdown (Syncs with Clickable Column Headers) */}
+          <div className="flex items-center gap-1.5">
+            <label htmlFor="registry-sort-select" className="text-xs text-slate-500 whitespace-nowrap">
+              Sort:
+            </label>
+            <select
+              id="registry-sort-select"
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as RegistrySortKey)}
+              className="min-h-[38px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-800 focus:border-slate-900 focus:outline-none"
+            >
+              <option value="sequence">Job Sequence</option>
+              <option value="docNumber">Document No.</option>
+              <option value="prefix">Doc Type</option>
+              <option value="customer">Client / Supplier</option>
+              <option value="jobName">Job Reference</option>
+              <option value="rfqRef">RFQ No. / Tender Ref</option>
+              <option value="issuedAt">Issued Date</option>
+              <option value="amount">Amount</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+              title={sortDir === 'asc' ? 'Ascending' : 'Descending'}
+              aria-label="Toggle sort direction"
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer min-h-[38px] whitespace-nowrap"
+            >
+              {sortDir === 'asc' ? (
+                <>
+                  <ArrowUp className="w-3.5 h-3.5" />
+                  <span>Asc</span>
+                </>
+              ) : (
+                <>
+                  <ArrowDown className="w-3.5 h-3.5" />
+                  <span>Desc</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
@@ -194,7 +310,7 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
               onRequestConfirm({
                 title: 'Reset Master Registry to 0?',
                 message:
-                  'This clears all registry entries and resets the next document number back to #001. Issued numbers on existing jobs will also be unlocked so you can start from the beginning.',
+                  'This clears all registry entries and resets the next job sequence number back to #001. Issued numbers on existing jobs will also be unlocked so you can start from the beginning.',
                 confirmLabel: 'Reset to 0',
                 destructive: true,
                 onConfirm: onResetRegistry,
@@ -218,7 +334,7 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
             disabled={exporting}
             onClick={handleExportRegistry}
             className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold text-white hover:opacity-90 cursor-pointer min-h-[40px] whitespace-nowrap disabled:opacity-50"
-            style={{ backgroundColor: theme.primary }}
+            style={{ backgroundColor: theme.primary, color: theme.primaryText }}
           >
             <FileSpreadsheet className="w-3.5 h-3.5" />
             <span>{exporting ? 'Exporting...' : 'Export Master_Registry.xlsx'}</span>
@@ -226,86 +342,181 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
         </div>
       </div>
 
-      {/* Registry Ledger Table */}
+      {/* Registry Ledger Table with Clickable Sortable Headers */}
       <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
         <div className="overflow-x-auto sheet-scroll">
           <table className="w-full border-collapse text-xs">
             <thead>
               <tr style={{ backgroundColor: theme.primary, color: theme.primaryText }}>
-                <th className="py-3 px-3 text-center font-semibold w-16">Seq</th>
-                <th className="py-3 px-3 text-left font-semibold">Document No.</th>
-                <th className="py-3 px-3 text-left font-semibold">Type</th>
-                <th className="py-3 px-3 text-left font-semibold">Customer / Supplier</th>
-                <th className="py-3 px-3 text-left font-semibold">Job Reference</th>
-                <th className="py-3 px-3 text-right font-semibold">Amount</th>
-                <th className="py-3 px-3 text-left font-semibold">Issued Date</th>
-                <th className="py-3 px-3 text-left font-semibold">Status</th>
-                <th className="py-3 px-3 text-right font-semibold">Action</th>
+                <th className="py-2.5 px-2 text-center font-semibold w-14">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSort('sequence')}
+                    className="inline-flex items-center gap-1 cursor-pointer hover:opacity-85 whitespace-nowrap"
+                  >
+                    <span>Seq</span>
+                    {renderSortIcon('sequence')}
+                  </button>
+                </th>
+                <th className="py-2.5 px-2.5 text-left font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSort('docNumber')}
+                    className="inline-flex items-center gap-1 cursor-pointer hover:opacity-85 whitespace-nowrap"
+                  >
+                    <span>Document No.</span>
+                    {renderSortIcon('docNumber')}
+                  </button>
+                </th>
+                <th className="py-2.5 px-2.5 text-left font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSort('prefix')}
+                    className="inline-flex items-center gap-1 cursor-pointer hover:opacity-85 whitespace-nowrap"
+                  >
+                    <span>Doc Type</span>
+                    {renderSortIcon('prefix')}
+                  </button>
+                </th>
+                <th className="py-2.5 px-2.5 text-left font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSort('customer')}
+                    className="inline-flex items-center gap-1 cursor-pointer hover:opacity-85 whitespace-nowrap"
+                  >
+                    <span>Client / Supplier</span>
+                    {renderSortIcon('customer')}
+                  </button>
+                </th>
+                <th className="py-2.5 px-2.5 text-left font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSort('jobName')}
+                    className="inline-flex items-center gap-1 cursor-pointer hover:opacity-85 whitespace-nowrap"
+                  >
+                    <span>Job Reference</span>
+                    {renderSortIcon('jobName')}
+                  </button>
+                </th>
+                <th className="py-2.5 px-2.5 text-left font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSort('rfqRef')}
+                    className="inline-flex items-center gap-1 cursor-pointer hover:opacity-85 whitespace-nowrap"
+                  >
+                    <span>RFQ No. / Tender Ref</span>
+                    {renderSortIcon('rfqRef')}
+                  </button>
+                </th>
+                <th className="py-2.5 px-2.5 text-right font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSort('amount')}
+                    className="inline-flex items-center gap-1 cursor-pointer hover:opacity-85 whitespace-nowrap"
+                  >
+                    <span>Amount</span>
+                    {renderSortIcon('amount')}
+                  </button>
+                </th>
+                <th className="py-2.5 px-2 text-left font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSort('issuedAt')}
+                    className="inline-flex items-center gap-1 cursor-pointer hover:opacity-85 whitespace-nowrap"
+                  >
+                    <span>Issued Date</span>
+                    {renderSortIcon('issuedAt')}
+                  </button>
+                </th>
+                <th className="py-2.5 px-2 text-left font-semibold">Status</th>
+                <th className="py-2.5 px-2.5 text-right font-semibold">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-10 text-center text-slate-500">
+                  <td colSpan={10} className="py-10 text-center text-slate-500">
                     {entries.length === 0
                       ? 'Registry is at 0. Issue your first document to claim #001.'
                       : 'No registry records match your current filter.'}
                   </td>
                 </tr>
               ) : (
-                filtered.map((entry, idx) => (
-                  <tr
-                    key={entry.sequence}
-                    style={idx % 2 === 1 ? { backgroundColor: theme.zebraRow } : undefined}
-                    className="hover:bg-slate-50 transition-colors"
-                  >
-                    <td className="py-3 px-3 text-center font-mono-tabular text-slate-500">
-                      {entry.sequence}
-                    </td>
-                    <td
-                      className={`py-3 px-3 font-mono-tabular font-semibold ${
-                        entry.status === 'VOID' ? 'line-through text-red-700' : 'text-slate-900'
-                      }`}
+                filtered.map((entry, idx) => {
+                  const isSupplier = entry.prefix === 'PO';
+                  return (
+                    <tr
+                      key={entry.docNumber}
+                      style={idx % 2 === 1 ? { backgroundColor: theme.zebraRow } : undefined}
+                      className="hover:bg-slate-50 transition-colors"
                     >
-                      {entry.docNumber}
-                    </td>
-                    <td className="py-3 px-3 text-slate-700">{DOC_META[entry.prefix].shortName}</td>
-                    <td className="py-3 px-3 font-medium text-slate-900">{entry.customer}</td>
-                    <td className="py-3 px-3 text-slate-600">{entry.jobName}</td>
-                    <td className="py-3 px-3 text-right font-mono-tabular text-slate-900">
-                      {entry.amount > 0 ? formatMoney(entry.amount, entry.currency) : '—'}
-                    </td>
-                    <td className="py-3 px-3 font-mono-tabular text-slate-600">
-                      {entry.issuedAt.slice(0, 10)}
-                    </td>
-                    <td className="py-3 px-3">
-                      <span
-                        className={`font-semibold ${
-                          entry.status === 'VOID' ? 'text-red-700' : 'text-emerald-700'
+                      <td className="py-2.5 px-2 text-center font-mono-tabular text-slate-500">
+                        #{String(entry.sequence).padStart(3, '0')}
+                      </td>
+                      <td
+                        className={`py-2.5 px-2.5 font-mono-tabular font-semibold whitespace-nowrap ${
+                          entry.status === 'VOID' ? 'line-through text-red-700' : 'text-slate-900'
                         }`}
                       >
-                        {entry.status === 'VOID' ? 'VOID' : 'ISSUED'}
-                      </span>
-                      {entry.voidReason && (
-                        <span className="ml-1.5 text-slate-500">· {entry.voidReason}</span>
-                      )}
-                    </td>
-                    <td className="py-3 px-3 text-right">
-                      {entry.status === 'ISSUED' ? (
-                        <button
-                          type="button"
-                          onClick={() => setVoidingSeq(entry.sequence)}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-red-700 hover:text-red-900 cursor-pointer whitespace-nowrap"
+                        {entry.docNumber}
+                      </td>
+                      <td className="py-2.5 px-2.5 text-slate-700 whitespace-nowrap">
+                        {DOC_META[entry.prefix].shortName}
+                      </td>
+                      <td className="py-2.5 px-2.5 max-w-[180px]">
+                        <div className="font-medium text-slate-900 truncate" title={entry.customer}>
+                          {entry.customer}
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {isSupplier ? 'Supplier' : 'Client'}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-2.5 text-slate-700 max-w-[150px] truncate" title={entry.jobName}>
+                        {entry.jobName}
+                      </td>
+                      <td className="py-2.5 px-2.5 font-mono-tabular text-slate-700 whitespace-nowrap">
+                        {entry.rfqRef?.trim() ? entry.rfqRef : '—'}
+                      </td>
+                      <td className="py-2.5 px-2.5 text-right font-mono-tabular text-slate-900 whitespace-nowrap">
+                        {entry.amount > 0 ? formatMoney(entry.amount, entry.currency) : '—'}
+                      </td>
+                      <td className="py-2.5 px-2 font-mono-tabular text-slate-600 whitespace-nowrap">
+                        {entry.issuedAt.slice(0, 10)}
+                      </td>
+                      <td className="py-2.5 px-2 whitespace-nowrap">
+                        <span
+                          className={`font-semibold ${
+                            entry.status === 'VOID' ? 'text-red-700' : 'text-emerald-700'
+                          }`}
                         >
-                          <Ban className="w-3.5 h-3.5" />
-                          <span>Mark VOID</span>
-                        </button>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
-                    </td>
-                  </tr>
-                ))
+                          {entry.status === 'VOID' ? 'VOID' : 'ISSUED'}
+                        </span>
+                        {entry.voidReason && (
+                          <span
+                            className="ml-1 text-[11px] text-slate-500 inline-block max-w-[90px] truncate align-bottom"
+                            title={entry.voidReason}
+                          >
+                            · {entry.voidReason}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-2.5 text-right whitespace-nowrap">
+                        {entry.status === 'ISSUED' ? (
+                          <button
+                            type="button"
+                            onClick={() => setVoidingDoc(entry.docNumber)}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-red-700 hover:text-red-900 cursor-pointer whitespace-nowrap"
+                          >
+                            <Ban className="w-3.5 h-3.5" />
+                            <span>Mark VOID</span>
+                          </button>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -313,14 +524,14 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
       </div>
 
       {/* Void Confirmation Modal */}
-      {voidingSeq !== null && (
+      {voidingDoc !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
           <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
             <h3 className="text-base font-semibold text-slate-900">
-              Mark Sequence #{voidingSeq} as VOID?
+              Mark {voidingDoc} as VOID?
             </h3>
             <p className="mt-2 text-xs text-slate-600">
-              Per Grand Group FZC registry rules, voided numbers are permanently retired and never reused. Sequence gaps are acceptable; duplicate numbers are never allowed.
+              Only this document record ({voidingDoc}) will be marked VOID in the registry. Other documents sharing this job&apos;s sequence remain intact.
             </p>
             <div className="mt-4">
               <label className="block text-xs font-medium text-slate-700 mb-1.5">
@@ -330,7 +541,7 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
                 type="text"
                 value={voidReason}
                 onChange={(e) => setVoidReason(e.target.value)}
-                placeholder="e.g. File not saved / customer revised qty"
+                placeholder="e.g. Client revised quantity / specification"
                 className="w-full min-h-[40px] rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
               />
             </div>
@@ -338,7 +549,7 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  setVoidingSeq(null);
+                  setVoidingDoc(null);
                   setVoidReason('');
                 }}
                 className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer"

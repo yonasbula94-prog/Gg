@@ -3,10 +3,13 @@ import {
   ComputedRow,
   DocPrefix,
   JobCalculationSummary,
+  JobCompletionMetrics,
   JobItemRow,
   MarkupRate,
   ProcurementJob,
   ValidationIssue,
+  WorkflowGateCheck,
+  WorkspaceTab,
 } from '../types/procurement';
 
 export function round2(val: number): number {
@@ -291,14 +294,14 @@ export function validateForIssue(
     if (!job.controls.supplierName.trim()) {
       issues.push({
         field: 'supplierName',
-        message: 'Cannot issue yet: enter Supplier Name on Supplier PO.',
+        message: 'Cannot issue yet: enter Supplier Name on Internal Quote or Supplier PO.',
       });
     }
   } else {
     if (!endUser) {
       issues.push({
         field: 'endUser',
-        message: 'Cannot issue yet: select an End User (or type custom name for OTHER).',
+        message: 'Cannot issue yet: select a Client (or type custom name for OTHER) on Quotation.',
       });
     }
   }
@@ -341,7 +344,7 @@ export function validateForIssue(
         issues.push({
           rowNumber: row.rowNumber,
           field: 'supplierUnitCost',
-          message: `Cannot issue yet: row ${row.rowNumber} is missing Supplier Unit Cost on PRICE CALC.`,
+          message: `Cannot issue yet: row ${row.rowNumber} is missing Supplier Unit Cost on Internal Quote / Price Calc.`,
         });
       }
     }
@@ -410,4 +413,233 @@ export function formatPct(rate: number): string {
   if (!Number.isFinite(rate)) return '0%';
   const pct = Math.round((rate * 100 + Number.EPSILON) * 100) / 100;
   return `${pct}%`;
+}
+
+export function isDocIssuedActive(job: ProcurementJob, prefix: DocPrefix): boolean {
+  const rec = job.issuedDocs[prefix];
+  return Boolean(rec && !rec.isVoided);
+}
+
+/**
+ * Evaluates guided staged workflow prerequisites before issuing a document.
+ * No document is ever auto-issued; guided gates allow optional manual override.
+ */
+export function getWorkflowGateStatus(
+  job: ProcurementJob,
+  prefix: DocPrefix
+): WorkflowGateCheck {
+  const hasQT = isDocIssuedActive(job, 'QT');
+  const hasPI = isDocIssuedActive(job, 'PI');
+  const hasPO = isDocIssuedActive(job, 'PO');
+  const hasPL = isDocIssuedActive(job, 'PL');
+  const wf = job.workflow;
+
+  if (prefix === 'QT') {
+    const hasSupplierCost = job.items.some(
+      (r) => !isRowEmpty(r) && r.supplierUnitCost !== null && r.supplierUnitCost > 0
+    );
+    return {
+      isReady: true,
+      title: 'Stage 1 · Customer Quotation (Master Entry)',
+      requirements: [
+        {
+          id: 'supplier_costs',
+          label: 'Internal Supplier Quote & Price Calc unit costs entered',
+          met: hasSupplierCost,
+        },
+      ],
+      guidance: hasSupplierCost
+        ? 'Issuing Quotation assigns this job’s shared sequence number and unlocks Proforma Invoice (PI).'
+        : 'Enter supplier costs on Internal Quote or Price Calc first, then issue Quotation to claim this job’s sequence number.',
+      recommendedTab: hasSupplierCost ? undefined : 'INTERNAL_QUOTE',
+      recommendedTabLabel: hasSupplierCost ? undefined : 'Open Internal Quote',
+    };
+  }
+
+  if (prefix === 'PI') {
+    return {
+      isReady: hasQT,
+      title: 'Stage 2 · Proforma Invoice Gate',
+      requirements: [
+        {
+          id: 'qt_issued',
+          label: 'Customer Quotation (QT) issued first',
+          met: hasQT,
+        },
+      ],
+      guidance: hasQT
+        ? `Quotation (${job.issuedDocs.QT?.docNumber}) is issued. Proforma Invoice is unlocked and will share sequence #${String(job.jobSequence || 1).padStart(3, '0')}.`
+        : 'Recommended workflow: issue Customer Quotation (QT) first so Proforma Invoice inherits the job’s shared sequence number.',
+      recommendedTab: 'QT',
+      recommendedTabLabel: 'Go to Quotation (QT)',
+    };
+  }
+
+  if (prefix === 'PO' || prefix === 'CI') {
+    const docLabel = prefix === 'PO' ? 'Supplier PO' : 'Commercial Invoice';
+    const poConfirmed = Boolean(wf?.endUserPoConfirmed);
+    return {
+      isReady: poConfirmed,
+      title: `Stage 3 · Client PO Confirmation Gate (${docLabel})`,
+      requirements: [
+        {
+          id: 'pi_issued',
+          label: 'Proforma Invoice (PI) issued to client',
+          met: hasPI,
+        },
+        {
+          id: 'client_po_received',
+          label: 'PO from Client / End-User received & confirmed',
+          met: poConfirmed,
+        },
+      ],
+      guidance: poConfirmed
+        ? `Client PO receipt confirmed${job.controls.customerPoRef ? ` (${job.controls.customerPoRef})` : ''}. You may now manually issue ${docLabel}.`
+        : `Confirm below that the Purchase Order from the Client has been received before issuing ${docLabel}.`,
+      recommendedTab: !hasPI ? 'PI' : undefined,
+      recommendedTabLabel: !hasPI ? 'Go to Proforma Invoice' : undefined,
+    };
+  }
+
+  if (prefix === 'PL') {
+    const paid = Boolean(wf?.supplierPaidConfirmed);
+    const supPl = Boolean(wf?.supplierPackingListReceived);
+    const ready = paid && supPl;
+    return {
+      isReady: ready,
+      title: 'Stage 4 · Supplier Payment & Packing List Gate',
+      requirements: [
+        {
+          id: 'po_issued',
+          label: 'Supplier PO (PO) issued to supplier',
+          met: hasPO,
+        },
+        {
+          id: 'supplier_paid',
+          label: 'Payment completed to supplier',
+          met: paid,
+        },
+        {
+          id: 'supplier_pl_received',
+          label: 'Packing List received from supplier',
+          met: supPl,
+        },
+      ],
+      guidance: ready
+        ? 'Supplier payment and supplier packing list confirmed. Issuing Packing List will populate Delivery Note (DN) automatically.'
+        : 'Confirm both supplier payment completion and receipt of supplier packing list below before issuing Packing List.',
+      recommendedTab: !hasPO ? 'PO' : undefined,
+      recommendedTabLabel: !hasPO ? 'Go to Supplier PO' : undefined,
+    };
+  }
+
+  // DN
+  return {
+    isReady: hasPL,
+    title: 'Stage 4 · Delivery Note Gate',
+    requirements: [
+      {
+        id: 'pl_issued',
+        label: 'Packing List (PL) issued (populates cartons, weights & quantities)',
+        met: hasPL,
+      },
+    ],
+    guidance: hasPL
+      ? `Packing List (${job.issuedDocs.PL?.docNumber}) is issued and carton/weight data is populated. Enter delivery details and issue Delivery Note.`
+      : 'Issue the Packing List first so Delivery Note is populated with verified carton numbers and weights.',
+    recommendedTab: 'PL',
+    recommendedTabLabel: 'Go to Packing List (PL)',
+  };
+}
+
+/**
+ * Calculates real per-job completion percentage across the 9 procurement lifecycle milestones.
+ */
+export function getJobCompletionMetrics(job: ProcurementJob): JobCompletionMetrics {
+  const hasSupplierInfo =
+    Boolean(job.supplierQuote?.supplierName?.trim() || job.controls.supplierName.trim()) &&
+    job.items.some((r) => !isRowEmpty(r) && r.supplierUnitCost !== null && r.supplierUnitCost > 0);
+  const hasQT = isDocIssuedActive(job, 'QT');
+  const hasPI = isDocIssuedActive(job, 'PI');
+  const hasEndUserPoGate = Boolean(job.workflow?.endUserPoConfirmed);
+  const hasPO = isDocIssuedActive(job, 'PO');
+  const hasCI = isDocIssuedActive(job, 'CI');
+  const hasSupplierShipmentGate = Boolean(
+    job.workflow?.supplierPaidConfirmed && job.workflow?.supplierPackingListReceived
+  );
+  const hasPL = isDocIssuedActive(job, 'PL');
+  const hasDN = isDocIssuedActive(job, 'DN');
+
+  const steps = [
+    hasSupplierInfo,
+    hasQT,
+    hasPI,
+    hasEndUserPoGate,
+    hasPO,
+    hasCI,
+    hasSupplierShipmentGate,
+    hasPL,
+    hasDN,
+  ];
+  const completedSteps = steps.filter(Boolean).length;
+  const totalSteps = steps.length;
+  const percent = Math.round((completedSteps / totalSteps) * 100);
+  const isComplete = hasDN;
+
+  let currentStageLabel = 'Draft / Intake';
+  let nextTab: WorkspaceTab = 'INTERNAL_QUOTE';
+  let nextActionLabel = 'Add Supplier Quote';
+
+  if (hasDN) {
+    currentStageLabel = 'Delivered';
+    nextTab = 'DN';
+    nextActionLabel = 'View Delivery Note';
+  } else if (hasPL) {
+    currentStageLabel = 'Ready for Delivery';
+    nextTab = 'DN';
+    nextActionLabel = 'Issue Delivery Note';
+  } else if (hasSupplierShipmentGate) {
+    currentStageLabel = 'Ready to Pack';
+    nextTab = 'PL';
+    nextActionLabel = 'Issue Packing List';
+  } else if (hasPO && hasCI) {
+    currentStageLabel = 'Awaiting Supplier PL & Payment';
+    nextTab = 'PL';
+    nextActionLabel = 'Confirm Payment & PL';
+  } else if (hasEndUserPoGate) {
+    currentStageLabel = hasPO ? 'Awaiting CI Issue' : 'Client PO Confirmed';
+    nextTab = hasPO ? 'CI' : 'PO';
+    nextActionLabel = hasPO ? 'Issue Commercial Inv.' : 'Issue Supplier PO';
+  } else if (hasPI) {
+    currentStageLabel = 'Awaiting Client PO';
+    nextTab = 'PO';
+    nextActionLabel = 'Confirm Client PO';
+  } else if (hasQT) {
+    currentStageLabel = 'Quoted · Ready for PI';
+    nextTab = 'PI';
+    nextActionLabel = 'Issue Proforma Inv.';
+  } else if (hasSupplierInfo) {
+    currentStageLabel = 'Costed · Ready to Quote';
+    nextTab = 'QT';
+    nextActionLabel = 'Issue Quotation';
+  }
+
+  return {
+    completedSteps,
+    totalSteps,
+    percent,
+    currentStageLabel,
+    nextTab,
+    nextActionLabel,
+    hasInternalQuote: hasSupplierInfo,
+    hasQT,
+    hasPI,
+    hasEndUserPoGate,
+    hasPO,
+    hasCI,
+    hasSupplierShipmentGate,
+    hasPL,
+    hasDN,
+    isComplete,
+  };
 }

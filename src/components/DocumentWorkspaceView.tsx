@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Circle,
   Copy,
   Eye,
   FileSpreadsheet,
@@ -13,6 +15,7 @@ import {
   Plus,
   Printer,
   RotateCcw,
+  ShieldCheck,
   SlidersHorizontal,
   Table as TableIcon,
   X,
@@ -24,15 +27,18 @@ import {
   resolveDocumentColumns,
   UOM_OPTIONS,
 } from '../constants/themes';
+import { formatDocNumber } from '../store/storage';
 import {
   CompanyProfile,
   ConfirmDialogRequest,
   CustomColumnDef,
   CustomColumnPosition,
   DocPrefix,
+  InquiryType,
   JobCalculationSummary,
   JobControls,
   JobItemRow,
+  JobWorkflowState,
   PlatformMode,
   ProcurementJob,
   ThemePalette,
@@ -43,6 +49,7 @@ import {
   formatMoney,
   formatNumber,
   getResolvedEndUser,
+  getWorkflowGateStatus,
   validateForIssue,
 } from '../utils/calculations';
 import { exportIssuedDocumentXlsx } from '../utils/excelEngine';
@@ -56,8 +63,11 @@ interface DocumentWorkspaceViewProps {
   theme: ThemePalette;
   company: CompanyProfile;
   platformMode: PlatformMode;
+  nextNewJobSeq: number;
   onUpdateJobName: (name: string) => void;
+  onUpdateInquiryType: (inquiryType: InquiryType) => void;
   onUpdateControls: (patch: Partial<JobControls>) => void;
+  onUpdateWorkflow: (patch: Partial<JobWorkflowState>) => void;
   onUpdateCustomColumns: (cols: CustomColumnDef[], nextOrder?: string[]) => void;
   onUpdateColumnOrder: (order: string[] | undefined) => void;
   onUpdateItem: (rowNumber: number, patch: Partial<JobItemRow>) => void;
@@ -98,8 +108,11 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
   theme,
   company,
   platformMode,
+  nextNewJobSeq,
   onUpdateJobName,
+  onUpdateInquiryType,
   onUpdateControls,
+  onUpdateWorkflow,
   onUpdateCustomColumns,
   onUpdateColumnOrder,
   onUpdateItem,
@@ -109,7 +122,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
   onRequestConfirm,
   onNotify,
 }) => {
-  const [subView, setSubView] = useState<'edit' | 'preview'>(prefix === 'PI' ? 'edit' : 'preview');
+  const [subView, setSubView] = useState<'edit' | 'preview'>(prefix === 'QT' ? 'edit' : 'preview');
   const [controlsOpen, setControlsOpen] = useState(true);
   const [remarksOpen, setRemarksOpen] = useState(false);
   const [extraColsOpen, setExtraColsOpen] = useState(false);
@@ -259,6 +272,11 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
     }
   };
 
+  const gateStatus = getWorkflowGateStatus(job, prefix);
+  const plannedSeq = job.jobSequence || nextNewJobSeq;
+  const plannedYear = job.jobSequenceYear || new Date().getFullYear();
+  const plannedDocNo = formatDocNumber(prefix, plannedSeq, plannedYear);
+
   const handleTryIssue = () => {
     const errors = validateForIssue(job, prefix, calc);
     if (errors.length > 0) {
@@ -266,6 +284,22 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
       return;
     }
     setValidationErrors([]);
+
+    if (!gateStatus.isReady) {
+      const unmet = gateStatus.requirements
+        .filter((r) => !r.met)
+        .map((r) => `• ${r.label}`)
+        .join('\n');
+      onRequestConfirm({
+        title: `Workflow Gate Warning — Override & Issue ${meta.shortName}?`,
+        message: `Recommended stage prerequisites are not yet complete:\n${unmet}\n\n${gateStatus.guidance}\n\nYou can complete those steps first, or override this gate and issue ${plannedDocNo} manually now.`,
+        confirmLabel: `Override Gate & Issue ${meta.shortName}`,
+        destructive: false,
+        onConfirm: () => onIssueDocument(prefix),
+      });
+      return;
+    }
+
     onIssueDocument(prefix);
   };
 
@@ -376,11 +410,11 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
       ? `${job.controls.shipDate || 'No Ship Date'} · ${job.controls.portOfLoading || '—'}`
       : prefix === 'DN'
       ? `${job.controls.deliveryDate || 'No Delivery Date'} · ${job.controls.transportRef || '—'}`
-      : prefix === 'QT'
-      ? `${job.controls.rfqRef || 'No RFQ Ref'} · ${job.controls.deliveryLeadTime || '—'}`
+      : prefix === 'PI'
+      ? `${job.controls.customerPoRef || 'No PO Ref'} · ${job.controls.paymentTerms || '—'}`
       : prefix === 'CI'
       ? `${job.controls.customerPoRef || 'No PO Ref'} · ${job.controls.incoterm} ${job.controls.destination}`
-      : `${endUser || 'No End User'} · ${curr} · ${job.controls.incoterm} ${job.controls.destination}`;
+      : `${endUser || 'No Client'} · ${job.inquiryType || 'RFQ'} · ${curr} · ${job.controls.incoterm} ${job.controls.destination}`;
 
   const remarksFilledCount = [
     job.controls.remarks.trim(),
@@ -405,7 +439,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
               }`}
             >
               <TableIcon className="w-3.5 h-3.5" />
-              <span>{prefix === 'PI' ? 'Job Entry & Controls' : 'Document Inputs'}</span>
+              <span>{prefix === 'QT' ? 'Master Job Controls' : 'Document Inputs'}</span>
             </button>
             <button
               type="button"
@@ -421,15 +455,21 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
             </button>
           </div>
 
-          {/* Show Issued badge ONLY when document has been formally issued */}
-          {isLocked && issued && (
+          {/* Show Issued badge OR Job Shared Sequence preview (strictly no-print; never shown on A4) */}
+          {isLocked && issued ? (
             <div className="text-xs flex items-center gap-2 font-mono-tabular">
               <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700">
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 Issued · {issued.docNumber}
               </span>
             </div>
-          )}
+          ) : job.jobSequence ? (
+            <div className="text-xs flex items-center gap-1.5 font-mono-tabular text-slate-600">
+              <span>Shared Job Seq #{String(job.jobSequence).padStart(3, '0')}</span>
+              <span className="text-slate-300">→</span>
+              <span className="font-semibold text-slate-900">{plannedDocNo}</span>
+            </div>
+          ) : null}
         </div>
 
         {/* Right Actions: Issue, Export Values-Only .xlsx, Print PDF */}
@@ -476,6 +516,146 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
         </div>
       </div>
 
+      {/* Guided Staged Workflow Gate Banner (Strictly no-print; zero auto-issuing) */}
+      {!isLocked && (
+        <div
+          className={`no-print rounded-lg border p-4 space-y-3 ${
+            gateStatus.isReady
+              ? 'border-emerald-200 bg-emerald-50/50'
+              : 'border-amber-200 bg-amber-50/60'
+          }`}
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-start gap-2.5 min-w-0">
+              {gateStatus.isReady ? (
+                <ShieldCheck className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0" />
+              ) : (
+                <AlertTriangle className="w-4 h-4 text-amber-700 mt-0.5 shrink-0" />
+              )}
+              <div className="space-y-1 min-w-0">
+                <div className="text-xs font-semibold text-slate-900">
+                  {gateStatus.title}
+                </div>
+                <p className="text-xs text-slate-700">{gateStatus.guidance}</p>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
+                  {gateStatus.requirements.map((req) => (
+                    <span
+                      key={req.id}
+                      className={`inline-flex items-center gap-1.5 text-xs ${
+                        req.met ? 'text-emerald-800 font-medium' : 'text-amber-900'
+                      }`}
+                    >
+                      {req.met ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      ) : (
+                        <Circle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                      )}
+                      <span>{req.label}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {gateStatus.recommendedTab && gateStatus.recommendedTabLabel && (
+              <button
+                type="button"
+                onClick={() => onNavigateTab(gateStatus.recommendedTab!)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50 cursor-pointer shrink-0 whitespace-nowrap"
+              >
+                <span>{gateStatus.recommendedTabLabel}</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Stage 3 Inline Confirmation: Client PO Received (on PO and CI) */}
+          {(prefix === 'PO' || prefix === 'CI') && (
+            <div className="pt-3 border-t border-slate-200/80 grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+              <label className="md:col-span-7 flex items-center gap-2.5 text-xs font-semibold text-slate-900 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={Boolean(job.workflow?.endUserPoConfirmed)}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    onUpdateWorkflow({
+                      endUserPoConfirmed: checked,
+                      endUserPoConfirmedAt: checked ? new Date().toISOString() : undefined,
+                    });
+                  }}
+                  className="w-4 h-4 rounded border-slate-300 accent-slate-900 cursor-pointer"
+                />
+                <span>Confirm: Purchase Order from Client / End-User Received</span>
+              </label>
+              <div className="md:col-span-5">
+                <input
+                  type="text"
+                  value={job.controls.customerPoRef}
+                  onChange={(e) => onUpdateControls({ customerPoRef: e.target.value })}
+                  placeholder="Client PO Number (e.g. PO-CLIENT-2026-08)"
+                  className="w-full min-h-[36px] rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Stage 4 Inline Confirmations: Payment Done to Supplier + Supplier Packing List Received (on PL) */}
+          {prefix === 'PL' && (
+            <div className="pt-3 border-t border-slate-200/80 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="rounded-md border border-slate-200 bg-white p-3 space-y-2">
+                <label className="flex items-center gap-2.5 text-xs font-semibold text-slate-900 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(job.workflow?.supplierPaidConfirmed)}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      onUpdateWorkflow({
+                        supplierPaidConfirmed: checked,
+                        supplierPaidConfirmedAt: checked ? new Date().toISOString() : undefined,
+                      });
+                    }}
+                    className="w-4 h-4 rounded border-slate-300 accent-slate-900 cursor-pointer"
+                  />
+                  <span>1. Payment Completed to Supplier</span>
+                </label>
+                <input
+                  type="text"
+                  value={job.workflow?.supplierPaymentRef || ''}
+                  onChange={(e) => onUpdateWorkflow({ supplierPaymentRef: e.target.value })}
+                  placeholder="TT / Wire Reference (optional)"
+                  className="w-full min-h-[34px] rounded-md border border-slate-200 bg-slate-50/70 px-2.5 py-1 text-xs font-mono-tabular text-blue-700 focus:border-slate-900 focus:bg-white focus:outline-none"
+                />
+              </div>
+
+              <div className="rounded-md border border-slate-200 bg-white p-3 space-y-2">
+                <label className="flex items-center gap-2.5 text-xs font-semibold text-slate-900 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(job.workflow?.supplierPackingListReceived)}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      onUpdateWorkflow({
+                        supplierPackingListReceived: checked,
+                        supplierPackingListAt: checked ? new Date().toISOString() : undefined,
+                      });
+                    }}
+                    className="w-4 h-4 rounded border-slate-300 accent-slate-900 cursor-pointer"
+                  />
+                  <span>2. Supplier Packing List Received</span>
+                </label>
+                <input
+                  type="text"
+                  value={job.workflow?.supplierPackingListRef || ''}
+                  onChange={(e) => onUpdateWorkflow({ supplierPackingListRef: e.target.value })}
+                  placeholder="Supplier PL Ref / AWB (optional)"
+                  className="w-full min-h-[34px] rounded-md border border-slate-200 bg-slate-50/70 px-2.5 py-1 text-xs font-mono-tabular text-blue-700 focus:border-slate-900 focus:bg-white focus:outline-none"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Validation Alert Panel */}
       {validationErrors.length > 0 && (
         <div className="no-print rounded-lg border border-red-200 bg-red-50 p-4">
@@ -514,7 +694,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
       {/* ==================== EDIT / CONTROLS SUBVIEW ==================== */}
       {subView === 'edit' && (
         <div className="no-print space-y-4">
-          {/* Collapsible 1: Master Job Controls (on PI) OR Document-Specific Inputs (on QT/PO/PL/DN/CI) */}
+          {/* Collapsible 1: Master Job Controls (on QT) OR Document-Specific Inputs (on PI/PO/CI/PL/DN) */}
           <div className="rounded-lg border border-slate-200 bg-white overflow-visible">
             <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 hover:bg-slate-50/70 transition-colors rounded-t-lg">
               <div className="flex items-center gap-2 min-w-0">
@@ -530,16 +710,16 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                     <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
                   )}
                   <h2 className="text-sm font-semibold text-slate-900">
-                    {prefix === 'PI'
+                    {prefix === 'QT'
                       ? 'Master Job Controls'
                       : `${meta.shortName} Inputs`}
                   </h2>
                 </button>
                 <HelpTip
                   text={
-                    prefix === 'PI'
-                      ? 'Universal Master Job Controls (PI Cell C8 & Block K:L). Changes entered here automatically propagate across Quotation, Supplier PO, Packing List, Delivery Note, Commercial Invoice, and Excel workbooks.'
-                      : `Fields specific to ${meta.shortName}. Shared client, currency, and line-item controls live on the Proforma Invoice (PI) master sheet.`
+                    prefix === 'QT'
+                      ? 'Universal Master Job Controls held on Customer Quotation (QT). Changes entered here automatically propagate across Proforma Invoice, Commercial Invoice, Packing List, Delivery Note, and Excel workbooks.'
+                      : `Fields specific to ${meta.shortName}. Shared client, RFQ/Tender ref, currency, and line-item controls live on the Customer Quotation (QT) master sheet.`
                   }
                 />
               </div>
@@ -560,19 +740,19 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
 
             {controlsOpen && (
               <div className="px-5 pb-5 pt-2 border-t border-slate-100 space-y-4">
-                {prefix !== 'PI' && (
+                {prefix !== 'QT' && (
                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3.5 py-2 text-xs text-slate-600">
                     <span className="truncate">
                       Master Job: <strong className="text-slate-900">{job.jobName}</strong> ·{' '}
-                      {endUser || 'Unassigned End User'} · {curr}
+                      {endUser || 'Unassigned Client'} · {curr}
                     </span>
                     <button
                       type="button"
-                      onClick={() => onNavigateTab('PI')}
+                      onClick={() => onNavigateTab('QT')}
                       className="inline-flex items-center gap-1 font-semibold text-blue-700 hover:underline cursor-pointer whitespace-nowrap"
                     >
                       <SlidersHorizontal className="w-3.5 h-3.5" />
-                      <span>Edit Master Controls on PI</span>
+                      <span>Edit Master Controls on Quotation</span>
                     </button>
                   </div>
                 )}
@@ -703,31 +883,20 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                       />
                     </div>
                   </div>
-                ) : prefix === 'QT' ? (
-                  /* Quotation-specific inputs only */
+                ) : prefix === 'PI' ? (
+                  /* Proforma Invoice-specific inputs (lightweight stage doc triggered by Quotation) */
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
                       <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                        RFQ / Tender Ref.
+                        Client PO Ref.
                       </label>
                       <input
                         type="text"
                         disabled={isLocked}
-                        value={job.controls.rfqRef}
-                        onChange={(e) => onUpdateControls({ rfqRef: e.target.value })}
+                        value={job.controls.customerPoRef}
+                        onChange={(e) => onUpdateControls({ customerPoRef: e.target.value })}
+                        placeholder="Optional until client confirms PO"
                         className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                        Delivery Lead Time
-                      </label>
-                      <input
-                        type="text"
-                        disabled={isLocked}
-                        value={job.controls.deliveryLeadTime}
-                        onChange={(e) => onUpdateControls({ deliveryLeadTime: e.target.value })}
-                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
                       />
                     </div>
                     <div>
@@ -742,13 +911,25 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                         className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
                       />
                     </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        Delivery Lead Time
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.deliveryLeadTime}
+                        onChange={(e) => onUpdateControls({ deliveryLeadTime: e.target.value })}
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </div>
                   </div>
                 ) : prefix === 'CI' ? (
                   /* Commercial Invoice-specific inputs only (mirrors PI closely on print) */
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
                       <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                        Customer PO Ref.
+                        Client PO Ref.
                       </label>
                       <input
                         type="text"
@@ -784,7 +965,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                     </div>
                   </div>
                 ) : (
-                  /* PI: Universal Master Job Controls */
+                  /* QT: Universal Master Job Controls */
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div className="lg:col-span-2">
                       <label className="block text-xs font-medium text-slate-600 mb-1.5">
@@ -800,8 +981,8 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
 
                     <div className="lg:col-span-2">
                       <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600 mb-1.5">
-                        <span>TO — End User</span>
-                        <HelpTip text={`Linked to PI Cell C8 (${company.endUsers.length} configured end users). Choose OTHER to type a custom organization name.`} />
+                        <span>TO — Client</span>
+                        <HelpTip text={`Select from ${company.endUsers.length} directory clients. Address populates automatically (locked) and ATTN clears for fresh entry. Choose OTHER for a custom one-off client.`} />
                       </label>
                       <select
                         disabled={isLocked}
@@ -831,14 +1012,14 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                     {job.controls.endUserSelect === 'OTHER' && (
                       <div className="lg:col-span-2">
                         <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                          Custom End-User Name
+                          Custom Client Name
                         </label>
                         <input
                           type="text"
                           disabled={isLocked}
                           value={job.controls.customEndUser}
                           onChange={(e) => onUpdateControls({ customEndUser: e.target.value })}
-                          placeholder="Type end-user organization name..."
+                          placeholder="Type client organization name..."
                           className="w-full min-h-[42px] rounded-lg border border-slate-900 px-3 py-2 text-sm text-blue-700 focus:outline-none"
                         />
                       </div>
@@ -846,7 +1027,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
 
                     <div className="lg:col-span-2">
                       <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                        End-User Contact / ATTN
+                        Contact / ATTN
                       </label>
                       <input
                         type="text"
@@ -870,7 +1051,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                         <HelpTip
                           text={
                             job.controls.endUserSelect !== 'OTHER'
-                              ? 'Locked on PI because this client is managed in Clients & Settings → End-User Directory. Edit saved addresses there, or choose OTHER for a one-off custom client.'
+                              ? 'Locked here because this client is managed in Clients & Settings → End-User Directory. Edit saved addresses there, or choose OTHER for a one-off custom client.'
                               : 'Enter the address for this custom client.'
                           }
                         />
@@ -900,6 +1081,49 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                             ? 'bg-slate-50 text-slate-600 cursor-not-allowed'
                             : 'text-blue-700 disabled:bg-slate-50'
                         }`}
+                      />
+                    </div>
+
+                    {/* Inquiry Type (RFQ vs Tender) for Dashboard Separate Counters */}
+                    <div>
+                      <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600 mb-1.5">
+                        <span>Inquiry Type</span>
+                        <HelpTip text="Classifies this job as an RFQ or a formal Tender for the Job Tracker Dashboard counters." />
+                      </label>
+                      <div className="grid grid-cols-2 gap-1 p-1 rounded-lg bg-slate-100 min-h-[42px]">
+                        {(['RFQ', 'TENDER'] as InquiryType[]).map((t) => {
+                          const selected = (job.inquiryType || 'RFQ') === t;
+                          return (
+                            <button
+                              key={t}
+                              type="button"
+                              disabled={isLocked}
+                              onClick={() => onUpdateInquiryType(t)}
+                              className={`rounded-md text-xs font-semibold transition-colors cursor-pointer disabled:opacity-60 ${
+                                selected
+                                  ? 'text-white shadow-sm'
+                                  : 'text-slate-600 hover:text-slate-900'
+                              }`}
+                              style={selected ? { backgroundColor: theme.primary } : undefined}
+                            >
+                              {t === 'RFQ' ? 'RFQ' : 'Tender'}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                        RFQ / Tender Ref.
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isLocked}
+                        value={job.controls.rfqRef}
+                        onChange={(e) => onUpdateControls({ rfqRef: e.target.value })}
+                        placeholder="e.g. RFQ-2026-041 or TND-2026-09"
+                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
                       />
                     </div>
 
@@ -950,20 +1174,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
 
                     <div>
                       <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                        RFQ / Tender Ref.
-                      </label>
-                      <input
-                        type="text"
-                        disabled={isLocked}
-                        value={job.controls.rfqRef}
-                        onChange={(e) => onUpdateControls({ rfqRef: e.target.value })}
-                        className="w-full min-h-[42px] rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono-tabular text-blue-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                        Customer PO Ref.
+                        Client PO Ref.
                       </label>
                       <input
                         type="text"
@@ -987,7 +1198,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                       />
                     </div>
 
-                    <div className="lg:col-span-2">
+                    <div>
                       <label className="block text-xs font-medium text-slate-600 mb-1.5">
                         Delivery Lead Time
                       </label>
@@ -1243,7 +1454,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
           </div>
 
           {/* Line Items Entry: iPad Touch Cards vs Windows Desktop Grid */}
-          {platformMode === 'ipad' && (prefix === 'PI' || isLogistics) ? (
+          {platformMode === 'ipad' && (prefix === 'QT' || isLogistics) ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between px-1">
                 <h3 className="text-sm font-semibold text-slate-900">
@@ -1367,7 +1578,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                   <tbody className="divide-y divide-slate-200">
                     {calc.rows.map((row, idx) => {
                       const raw = job.items[idx];
-                      const canEditBase = prefix === 'PI' && !isLocked;
+                      const canEditBase = prefix === 'QT' && !isLocked;
                       const canEditLogistics = isLogistics && !isLocked && !row.isEmpty;
 
                       const renderEditCell = (colKey: string) => {
@@ -1769,7 +1980,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                           colSpan={1 + orderedColKeys.length}
                           className="py-10 text-center text-slate-400 border-b border-slate-200"
                         >
-                          No items entered yet. Switch to Job Entry &amp; Controls to populate rows 17–36.
+                          No items entered yet. Enter items on Internal Quote or Quotation (Master Job Controls) to populate rows 17–36.
                         </td>
                       </tr>
                     ) : (

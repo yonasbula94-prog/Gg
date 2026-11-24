@@ -4,6 +4,8 @@ export type MarkupRate = 0.1 | 0.15 | 0.18 | 0.2;
 
 export type ThemeVariantId = 'v1' | 'v2' | 'v3';
 
+export type InquiryType = 'RFQ' | 'TENDER';
+
 export type DocumentFontId =
   | 'Calibri'
   | 'Arial'
@@ -25,16 +27,56 @@ export interface ThemeCustomization {
 export type PlatformMode = 'windows' | 'ipad';
 
 export type WorkspaceTab =
-  | 'PI'
+  | 'TRACKER'
+  | 'INTERNAL_QUOTE'
   | 'PRICE_CALC'
   | 'QT'
+  | 'PI'
   | 'PO'
+  | 'CI'
   | 'PL'
   | 'DN'
-  | 'CI'
   | 'REGISTRY'
   | 'FILES'
   | 'STUDIO';
+
+export interface DashboardPreferences {
+  showRfqTenderCounters: boolean;
+  showCompletionFunnel: boolean;
+  showPerformanceChart: boolean;
+  showPriorityRanking: boolean;
+  showJobMatrix: boolean;
+  showFinancials: boolean;
+  includeCompleted: boolean;
+  performancePeriod: 'weekly' | 'monthly';
+  priorityMetric: 'profit' | 'value';
+}
+
+export interface SupplierQuoteData {
+  supplierName: string;
+  supplierContact: string;
+  supplierAddress: string;
+  supplierEmail: string;
+  supplierQuoteRef: string;
+  quoteDate: string;
+  validUntil: string;
+  currency: string;
+  incoterm: string;
+  paymentTerms: string;
+  deliveryLeadTime: string;
+  notes: string;
+}
+
+export interface JobWorkflowState {
+  endUserPoConfirmed: boolean;
+  endUserPoConfirmedAt?: string;
+  supplierPaidConfirmed: boolean;
+  supplierPaidConfirmedAt?: string;
+  supplierPaymentRef: string;
+  supplierPackingListReceived: boolean;
+  supplierPackingListRef: string;
+  supplierPackingListAt?: string;
+}
 
 export interface CompanyProfile {
   name: string;
@@ -106,7 +148,7 @@ export interface JobItemRow {
   qty: number | null;
   // Optional per-job custom columns (Part No., CAS No., etc.)
   customFields?: Record<string, string>;
-  // PRICE CALC inputs (internal, never sent to customer)
+  // PRICE CALC & INTERNAL QUOTE inputs (internal, never sent to customer)
   supplierUnitCost: number | null;
   boxes: number | null;
   boxLengthCm: number | null;
@@ -127,7 +169,7 @@ export interface FreightConfig {
 }
 
 export interface JobControls {
-  endUserSelect: string; // Dropdown from configured end users
+  endUserSelect: string; // Dropdown from configured clients
   customEndUser: string; // Used when endUserSelect === 'OTHER'
   endUserContact: string;
   endUserAddress: string;
@@ -158,8 +200,8 @@ export interface JobControls {
 
 export interface IssuedDocRecord {
   prefix: DocPrefix;
-  docNumber: string; // Hard-coded on issue, e.g., PI-GG-043-2026
-  sequence: number;
+  docNumber: string; // Hard-coded on issue, e.g., QT-GG-001-2026
+  sequence: number; // Shared job sequence across all docs in the same job
   issuedAt: string;
   issuedBy: string;
   isVoided?: boolean;
@@ -173,10 +215,15 @@ export interface IssuedDocRecord {
 export interface ProcurementJob {
   id: string;
   jobName: string;
+  jobSequence?: number; // Assigned on first issued document; reused by all prefixes in this job
+  jobSequenceYear?: number;
+  inquiryType: InquiryType; // RFQ or TENDER
   createdAt: string;
   updatedAt: string;
   preparedBy: string;
   controls: JobControls;
+  supplierQuote: SupplierQuoteData;
+  workflow: JobWorkflowState;
   freight: FreightConfig;
   customColumns?: CustomColumnDef[];
   columnOrder?: string[]; // Custom visual order of standard + extra columns across all 6 docs
@@ -186,12 +233,14 @@ export interface ProcurementJob {
 
 export interface RegistryEntry {
   sequence: number;
-  docNumber: string; // PREFIX-GG-SEQ-YEAR
+  docNumber: string; // Unique key: PREFIX-GG-SEQ-YEAR
   prefix: DocPrefix;
   year: number;
   jobId: string;
   jobName: string;
-  customer: string;
+  customer: string; // Supplier name for PO; Client name for QT, PI, CI, PL, DN
+  counterpartyRole?: 'CLIENT' | 'SUPPLIER';
+  rfqRef?: string;
   currency: string;
   amount: number;
   issuedBy: string;
@@ -204,6 +253,38 @@ export interface ValidationIssue {
   rowNumber?: number;
   field: string;
   message: string;
+}
+
+export interface WorkflowGateCheck {
+  isReady: boolean;
+  title: string;
+  requirements: {
+    id: string;
+    label: string;
+    met: boolean;
+  }[];
+  guidance: string;
+  recommendedTab?: WorkspaceTab;
+  recommendedTabLabel?: string;
+}
+
+export interface JobCompletionMetrics {
+  completedSteps: number;
+  totalSteps: number;
+  percent: number;
+  currentStageLabel: string;
+  nextTab: WorkspaceTab;
+  nextActionLabel: string;
+  hasInternalQuote: boolean;
+  hasQT: boolean;
+  hasPI: boolean;
+  hasEndUserPoGate: boolean;
+  hasPO: boolean;
+  hasCI: boolean;
+  hasSupplierShipmentGate: boolean;
+  hasPL: boolean;
+  hasDN: boolean;
+  isComplete: boolean;
 }
 
 export interface ConfirmDialogRequest {
@@ -231,7 +312,7 @@ export interface ComputedRow {
   unitPrice15: number | null;
   unitPrice18: number | null;
   unitPrice20: number | null;
-  // Active markup unit price (PRICE CALC col R -> PI Unit Price, includes internal VAT when enabled)
+  // Active markup unit price (PRICE CALC col R -> QT / PI / CI Unit Price, includes internal VAT when enabled)
   activeUnitPrice: number | null;
   activeTotalPrice: number | null;
   // Logistics

@@ -13,6 +13,7 @@ import { EXCEL_THEMES } from '../constants/themes';
 import {
   CompanyProfile,
   ConfirmDialogRequest,
+  DashboardPreferences,
   ProcurementJob,
   RegistryEntry,
   ThemeCustomization,
@@ -37,6 +38,7 @@ interface FilesHubViewProps {
   theme: ThemePalette;
   themeCustomization: ThemeCustomization;
   company: CompanyProfile;
+  dashboardPrefs?: DashboardPreferences;
   onImportJob: (job: ProcurementJob) => void;
   onOpenSupplierQuote: (quote: ParsedSupplierQuote) => void;
   onSyncRegistry: (entries: RegistryEntry[]) => void;
@@ -45,7 +47,8 @@ interface FilesHubViewProps {
     registry: RegistryEntry[],
     company?: CompanyProfile,
     themeId?: ThemeVariantId,
-    themeCustomization?: ThemeCustomization
+    themeCustomization?: ThemeCustomization,
+    dashboardPrefs?: DashboardPreferences
   ) => void;
   onRequestConfirm: (req: ConfirmDialogRequest) => void;
   onNotify: (msg: string) => void;
@@ -59,6 +62,7 @@ export const FilesHubView: React.FC<FilesHubViewProps> = ({
   theme,
   themeCustomization,
   company,
+  dashboardPrefs,
   onImportJob,
   onOpenSupplierQuote,
   onSyncRegistry,
@@ -129,17 +133,18 @@ export const FilesHubView: React.FC<FilesHubViewProps> = ({
     try {
       const payload = {
         exportedAt: new Date().toISOString(),
-        version: 4,
+        version: 5,
         themeId,
         themeCustomization,
         company,
+        dashboardPrefs,
         jobs: allJobs,
         registry,
       };
       const filename = `GG_Procurement_Offline_Backup_${new Date().toISOString().slice(0, 10)}.json`;
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       await shareOrDownloadBlob(blob, filename, 'application/json');
-      onNotify('Exported offline JSON backup (jobs, registry, clients, branding, colors & font).');
+      onNotify('Exported offline JSON backup (jobs, workflow stages, registry, dashboard settings & branding).');
     } catch {
       onNotify('Failed to export JSON backup.');
     } finally {
@@ -162,6 +167,7 @@ export const FilesHubView: React.FC<FilesHubViewProps> = ({
             ? (parsed.themeId as ThemeVariantId)
             : undefined;
         const incomingThemeCustom = parsed.themeCustomization as ThemeCustomization | undefined;
+        const incomingDashPrefs = parsed.dashboardPrefs as DashboardPreferences | undefined;
         onRequestConfirm({
           title: 'Restore Workspace From Backup?',
           message: `This will replace your current ${allJobs.length} job${allJobs.length === 1 ? '' : 's'} and ${registry.length} registry record${registry.length === 1 ? '' : 's'} with ${incomingJobs.length} job${incomingJobs.length === 1 ? '' : 's'} and ${incomingRegistry.length} registry record${incomingRegistry.length === 1 ? '' : 's'} from "${file.name}".`,
@@ -173,7 +179,8 @@ export const FilesHubView: React.FC<FilesHubViewProps> = ({
               incomingRegistry,
               incomingCompany,
               incomingThemeId,
-              incomingThemeCustom
+              incomingThemeCustom,
+              incomingDashPrefs
             );
             onNotify(
               `Restored ${incomingJobs.length} jobs and ${incomingRegistry.length} registry entries.`

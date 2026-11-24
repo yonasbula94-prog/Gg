@@ -10,6 +10,7 @@ import {
   ComputedRow,
   CustomColumnDef,
   CustomColumnPosition,
+  DashboardPreferences,
   DocPrefix,
   JobItemRow,
   ProcurementJob,
@@ -17,7 +18,7 @@ import {
   ThemePalette,
   ThemeVariantId,
 } from '../types/procurement';
-import { calculateJob, getResolvedEndUser } from './calculations';
+import { calculateJob, getJobCompletionMetrics, getResolvedEndUser } from './calculations';
 import { createBlankJob } from '../store/storage';
 import { shareOrDownloadBlob } from './platform';
 import { ParsedSupplierQuote, parseGenericSupplierXlsx } from './supplierQuoteParser';
@@ -824,6 +825,89 @@ export async function exportJobTemplateXlsx(
     }
   });
 
+  // --- SHEET 2B: INTERNAL QUOTE (Confidential Supplier Offer & Commercial Terms) ---
+  const wsIQ = wb.addWorksheet('INTERNAL QUOTE', {
+    views: [{ showGridLines: false, state: 'frozen', ySplit: 12 }],
+    pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  wsIQ.columns = [
+    { width: 2 },
+    { width: 6 },
+    { width: 32 },
+    { width: 34 },
+    { width: 10 },
+    { width: 10 },
+    { width: 16 },
+    { width: 18 },
+  ];
+  wsIQ.mergeCells('B2:H2');
+  wsIQ.getCell('B2').value = 'INTERNAL SUPPLIER QUOTATION — CONFIDENTIAL (NOT FOR CLIENT DISTRIBUTION)';
+  wsIQ.getCell('B2').font = { name: fontName, size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+  wsIQ.getCell('B2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF991B1B' } };
+  wsIQ.getCell('B2').alignment = { vertical: 'middle', indent: 1 };
+  wsIQ.getRow(2).height = 28;
+
+  const sq = job.supplierQuote;
+  const iqMeta: [number, string, string, string, string][] = [
+    [4, 'Supplier Name', includeCurrentData ? sq.supplierName || job.controls.supplierName : '', 'Quote Ref.', includeCurrentData ? sq.supplierQuoteRef || job.controls.supplierRef : ''],
+    [5, 'Supplier Contact', includeCurrentData ? sq.supplierContact : '', 'Quote Date', includeCurrentData ? sq.quoteDate : ''],
+    [6, 'Supplier Email', includeCurrentData ? sq.supplierEmail : '', 'Valid Until', includeCurrentData ? sq.validUntil : ''],
+    [7, 'Supplier Address', includeCurrentData ? sq.supplierAddress || job.controls.supplierAddress : '', 'Incoterm / Currency', includeCurrentData ? `${sq.incoterm || job.controls.incoterm} · ${sq.currency || job.controls.currency}` : ''],
+    [8, 'Payment Terms', includeCurrentData ? sq.paymentTerms : '', 'Lead Time', includeCurrentData ? sq.deliveryLeadTime : ''],
+  ];
+  iqMeta.forEach(([r, l1, v1, l2, v2]) => {
+    wsIQ.getRow(r).height = 20;
+    wsIQ.getCell(r, 2).value = l1;
+    wsIQ.getCell(r, 2).font = { name: fontName, size: 9, bold: true, color: { argb: 'FF64748B' } };
+    wsIQ.mergeCells(r, 3, r, 4);
+    wsIQ.getCell(r, 3).value = v1;
+    wsIQ.getCell(r, 3).font = { name: fontName, size: 10, color: { argb: theme.excel.inputFont } };
+    wsIQ.getCell(r, 5).value = l2;
+    wsIQ.getCell(r, 5).font = { name: fontName, size: 9, bold: true, color: { argb: 'FF64748B' } };
+    wsIQ.mergeCells(r, 6, r, 8);
+    wsIQ.getCell(r, 6).value = v2;
+    wsIQ.getCell(r, 6).font = { name: fontName, size: 10, color: { argb: theme.excel.inputFont } };
+  });
+
+  const iqHeaders = ['No.', 'Requested Description', 'Supplier Offered Description', 'UoM', 'Qty', 'Supplier Unit Cost', 'Supplier Total'];
+  wsIQ.getRow(12).height = 25;
+  iqHeaders.forEach((h, i) => {
+    const cell = wsIQ.getCell(12, i + 2);
+    cell.value = h;
+    cell.font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.headerFont } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+    cell.alignment = { vertical: 'middle', horizontal: i === 0 || i === 3 ? 'center' : i >= 4 ? 'right' : 'left' };
+  });
+
+  for (let i = 0; i < 20; i++) {
+    const r = 13 + i;
+    const piR = 17 + i;
+    wsIQ.getRow(r).height = 22;
+    wsIQ.getCell(r, 2).value = { formula: `IF('PROFORMA INVOICE'!B${piR}="","",'PROFORMA INVOICE'!B${piR})` };
+    wsIQ.getCell(r, 3).value = { formula: `IF('PROFORMA INVOICE'!C${piR}="","",'PROFORMA INVOICE'!C${piR})` };
+    wsIQ.getCell(r, 4).value = { formula: `IF('PROFORMA INVOICE'!D${piR}="","",'PROFORMA INVOICE'!D${piR})` };
+    wsIQ.getCell(r, 5).value = { formula: `IF('PROFORMA INVOICE'!E${piR}="","",'PROFORMA INVOICE'!E${piR})` };
+    wsIQ.getCell(r, 6).value = { formula: `IF('PROFORMA INVOICE'!F${piR}="","",'PROFORMA INVOICE'!F${piR})` };
+    wsIQ.getCell(r, 7).value = { formula: `IF('PRICE CALC'!E${piR}="","",'PRICE CALC'!E${piR})` };
+    wsIQ.getCell(r, 8).value = { formula: `IF(OR(F${r}="",G${r}=""),"",F${r}*G${r})` };
+    for (let c = 2; c <= 8; c++) {
+      const cell = wsIQ.getCell(r, c);
+      cell.font = { name: fontName, size: 10, color: { argb: theme.excel.formulaFont } };
+      if (i % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.zebraFill } };
+      cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+      cell.alignment = { vertical: 'middle', horizontal: c === 2 || c === 5 ? 'center' : c >= 6 ? 'right' : 'left' };
+    }
+    wsIQ.getCell(r, 6).numFmt = '#,##0.##';
+    wsIQ.getCell(r, 7).numFmt = '#,##0.00';
+    wsIQ.getCell(r, 8).numFmt = '#,##0.00';
+  }
+  wsIQ.getCell(34, 7).value = 'TOTAL SUPPLIER OFFER';
+  wsIQ.getCell(34, 7).font = { name: fontName, size: 10, bold: true };
+  wsIQ.getCell(34, 7).alignment = { horizontal: 'right', vertical: 'middle' };
+  wsIQ.getCell(34, 8).value = { formula: 'SUM(H13:H32)' };
+  wsIQ.getCell(34, 8).numFmt = '#,##0.00';
+  wsIQ.getCell(34, 8).font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.strongBorderColor } };
+
   // --- SHEET 3: PRICE CALC (INTERNAL ONLY, E3 = Markup %, Col R = Active Unit Price, R41 = Customer Freight) ---
   const wsPC = wb.addWorksheet('PRICE CALC', {
     views: [{ showGridLines: false, state: 'frozen', ySplit: 16 }],
@@ -1233,6 +1317,11 @@ export async function exportJobTemplateXlsx(
       ['meta_includeVat', job.controls.includeVat !== false ? 'true' : 'false'],
       ['meta_vatRate', job.controls.vatRate],
       ['meta_columnOrder', job.columnOrder ? JSON.stringify(job.columnOrder) : ''],
+      ['meta_jobSequence', job.jobSequence ?? ''],
+      ['meta_jobSequenceYear', job.jobSequenceYear ?? ''],
+      ['meta_inquiryType', job.inquiryType || 'RFQ'],
+      ['meta_supplierQuoteJson', JSON.stringify(job.supplierQuote || {})],
+      ['meta_workflowJson', JSON.stringify(job.workflow || {})],
     ];
     metaRows.forEach(([k, v], idx) => {
       wsCtrl.getCell(6 + idx, 3).value = k;
@@ -1283,45 +1372,66 @@ export async function exportMasterRegistryXlsx(
 
   ws.columns = [
     { width: 2 },
-    { width: 10 }, // Seq
-    { width: 18 }, // Document No
-    { width: 10 }, // Prefix
-    { width: 26 }, // Customer / Supplier
+    { width: 9 },  // Seq
+    { width: 19 }, // Document No
+    { width: 12 }, // Doc Type
+    { width: 28 }, // Client / Supplier
     { width: 28 }, // Job Reference
+    { width: 20 }, // RFQ No. / Tender Ref
     { width: 10 }, // Currency
     { width: 16 }, // Amount
     { width: 18 }, // Issued By
-    { width: 18 }, // Issued Date
-    { width: 12 }, // Status
+    { width: 14 }, // Date
+    { width: 11 }, // Status
   ];
 
-  ws.mergeCells('B2:K2');
+  ws.mergeCells('B2:L2');
   ws.getCell('B2').value = `${company.name} — MASTER DOCUMENT REGISTRY`;
   ws.getCell('B2').font = { name: fontName, size: 14, bold: true, color: { argb: theme.excel.headerFont } };
   ws.getCell('B2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
   ws.getCell('B2').alignment = { vertical: 'middle', indent: 1 };
   ws.getRow(2).height = 28;
 
-  const cols = ['Seq', 'Document No.', 'Prefix', 'Customer / Party', 'Job Reference', 'Currency', 'Amount', 'Issued By', 'Date', 'Status'];
+  const cols = [
+    'Seq',
+    'Document No.',
+    'Doc Type',
+    'Client / Supplier',
+    'Job Reference',
+    'RFQ No. / Tender Ref',
+    'Currency',
+    'Amount',
+    'Issued By',
+    'Date',
+    'Status',
+  ];
   ws.getRow(4).height = 24;
   cols.forEach((h, i) => {
     const cell = ws.getCell(4, i + 2);
     cell.value = h;
     cell.font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.headerFont } };
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.accentFill } };
-    cell.alignment = { vertical: 'middle', horizontal: i === 0 || i === 2 || i === 5 || i === 9 ? 'center' : i === 6 ? 'right' : 'left' };
+    cell.alignment = {
+      vertical: 'middle',
+      horizontal: i === 0 || i === 2 || i === 6 || i === 10 ? 'center' : i === 7 ? 'right' : 'left',
+    };
   });
 
-  const sorted = [...entries].sort((a, b) => a.sequence - b.sequence);
+  const stageOrder: Record<DocPrefix, number> = { QT: 1, PI: 2, PO: 3, CI: 4, PL: 5, DN: 6 };
+  const sorted = [...entries].sort(
+    (a, b) => a.sequence - b.sequence || (stageOrder[a.prefix] || 9) - (stageOrder[b.prefix] || 9)
+  );
   sorted.forEach((entry, idx) => {
     const r = 5 + idx;
     ws.getRow(r).height = 22;
+    const roleTag = entry.prefix === 'PO' ? 'Supplier' : 'Client';
     const vals = [
       entry.sequence,
       entry.docNumber,
       entry.prefix,
-      entry.customer,
+      `${entry.customer} (${roleTag})`,
       entry.jobName,
+      entry.rfqRef || '—',
       entry.currency,
       entry.amount,
       entry.issuedBy,
@@ -1334,25 +1444,25 @@ export async function exportMasterRegistryXlsx(
       cell.font = {
         name: fontName,
         size: 10,
-        bold: cIdx === 1 || cIdx === 9,
+        bold: cIdx === 1 || cIdx === 10,
         color: { argb: entry.status === 'VOID' ? 'FFDC2626' : 'FF0F172A' },
       };
       if (idx % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.zebraFill } };
       cell.border = { bottom: thinBorder(theme.excel.borderColor) };
       cell.alignment = {
         vertical: 'middle',
-        horizontal: cIdx === 0 || cIdx === 2 || cIdx === 5 || cIdx === 9 ? 'center' : cIdx === 6 ? 'right' : 'left',
+        horizontal: cIdx === 0 || cIdx === 2 || cIdx === 6 || cIdx === 10 ? 'center' : cIdx === 7 ? 'right' : 'left',
       };
-      if (cIdx === 6) cell.numFmt = '#,##0.00';
+      if (cIdx === 7) cell.numFmt = '#,##0.00';
     });
   });
 
   // PREFIXES sheet
   const wsPref = wb.addWorksheet('PREFIXES');
   wsPref.columns = [{ width: 12 }, { width: 28 }, { width: 42 }];
-  wsPref.getRow(1).values = ['Prefix', 'Document Type', 'Format'];
+  wsPref.getRow(1).values = ['Prefix', 'Document Type', 'Format (Shared Job Sequence)'];
   wsPref.getRow(1).font = { bold: true };
-  (['PI', 'QT', 'PO', 'CI', 'PL', 'DN'] as DocPrefix[]).forEach((p, idx) => {
+  (['QT', 'PI', 'PO', 'CI', 'PL', 'DN'] as DocPrefix[]).forEach((p, idx) => {
     wsPref.getRow(2 + idx).values = [p, DOC_META[p].title, `${p}-GG-SEQ-YEAR`];
   });
 
@@ -1413,9 +1523,11 @@ export async function importWorkbookFromXlsx(
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer);
 
-  // 1. Check if it's a Master_Registry workbook
+  // 1. Check if it's a Master_Registry workbook (handles both 11-col with RFQ/Tender Ref and legacy 10-col)
   const regSheet = wb.getWorksheet('REGISTRY');
   if (regSheet && !wb.getWorksheet('PROFORMA INVOICE')) {
+    const col7Hdr = cellToString(regSheet.getCell(4, 7).value).toLowerCase();
+    const hasRfqCol = col7Hdr.includes('rfq') || col7Hdr.includes('tender');
     const entries: RegistryEntry[] = [];
     regSheet.eachRow((row, rowIdx) => {
       if (rowIdx < 5) return;
@@ -1423,7 +1535,10 @@ export async function importWorkbookFromXlsx(
       const docNo = cellToString(row.getCell(3).value);
       const prefix = cellToString(row.getCell(4).value).toUpperCase() as DocPrefix;
       if (seq && docNo && ['PI', 'QT', 'PO', 'CI', 'PL', 'DN'].includes(prefix)) {
-        const statusRaw = cellToString(row.getCell(11).value).toUpperCase();
+        const rawParty = cellToString(row.getCell(5).value) || '—';
+        const cleanParty = rawParty.replace(/\s*\((Client|Supplier)\)\s*$/i, '').trim() || rawParty;
+        const statusRaw = cellToString(row.getCell(hasRfqCol ? 12 : 11).value).toUpperCase();
+        const rfqVal = hasRfqCol ? cellToString(row.getCell(7).value) : '';
         entries.push({
           sequence: Math.floor(seq),
           docNumber: docNo,
@@ -1431,11 +1546,13 @@ export async function importWorkbookFromXlsx(
           year: Number(docNo.split('-').pop()) || new Date().getFullYear(),
           jobId: `imported-${seq}`,
           jobName: cellToString(row.getCell(6).value) || 'Imported Registry Entry',
-          customer: cellToString(row.getCell(5).value) || '—',
-          currency: cellToString(row.getCell(7).value) || 'USD',
-          amount: cellToNumber(row.getCell(8).value) ?? 0,
-          issuedBy: cellToString(row.getCell(9).value) || 'Excel Import',
-          issuedAt: cellToString(row.getCell(10).value) || new Date().toISOString().slice(0, 10),
+          customer: cleanParty,
+          counterpartyRole: prefix === 'PO' ? 'SUPPLIER' : 'CLIENT',
+          rfqRef: rfqVal === '—' ? '' : rfqVal,
+          currency: cellToString(row.getCell(hasRfqCol ? 8 : 7).value) || 'USD',
+          amount: cellToNumber(row.getCell(hasRfqCol ? 9 : 8).value) ?? 0,
+          issuedBy: cellToString(row.getCell(hasRfqCol ? 10 : 9).value) || 'Excel Import',
+          issuedAt: cellToString(row.getCell(hasRfqCol ? 11 : 10).value) || new Date().toISOString().slice(0, 10),
           status: statusRaw === 'VOID' ? 'VOID' : 'ISSUED',
         });
       }
@@ -1473,7 +1590,7 @@ export async function importWorkbookFromXlsx(
 
   if (wsCtrl) {
     const metaMap = new Map<string, ExcelJS.CellValue>();
-    for (let r = 6; r <= 30; r++) {
+    for (let r = 6; r <= 38; r++) {
       const key = cellToString(wsCtrl.getCell(r, 3).value);
       if (key.startsWith('meta_')) {
         metaMap.set(key, wsCtrl.getCell(r, 4).value);
@@ -1522,6 +1639,44 @@ export async function importWorkbookFromXlsx(
           const parsedOrder = JSON.parse(rawOrder);
           if (Array.isArray(parsedOrder)) {
             job.columnOrder = parsedOrder.filter((k): k is string => typeof k === 'string');
+          }
+        } catch {
+          // Ignore invalid JSON
+        }
+      }
+    }
+    if (metaMap.has('meta_jobSequence')) {
+      const js = cellToNumber(metaMap.get('meta_jobSequence') ?? null);
+      if (js !== null && js > 0) job.jobSequence = Math.floor(js);
+    }
+    if (metaMap.has('meta_jobSequenceYear')) {
+      const jsy = cellToNumber(metaMap.get('meta_jobSequenceYear') ?? null);
+      if (jsy !== null && jsy > 2000) job.jobSequenceYear = Math.floor(jsy);
+    }
+    if (metaMap.has('meta_inquiryType')) {
+      const it = getStr('meta_inquiryType')?.toUpperCase();
+      if (it === 'RFQ' || it === 'TENDER') job.inquiryType = it;
+    }
+    if (metaMap.has('meta_supplierQuoteJson')) {
+      const rawSq = getStr('meta_supplierQuoteJson');
+      if (rawSq) {
+        try {
+          const parsedSq = JSON.parse(rawSq);
+          if (parsedSq && typeof parsedSq === 'object') {
+            job.supplierQuote = { ...job.supplierQuote, ...parsedSq };
+          }
+        } catch {
+          // Ignore invalid JSON
+        }
+      }
+    }
+    if (metaMap.has('meta_workflowJson')) {
+      const rawWf = getStr('meta_workflowJson');
+      if (rawWf) {
+        try {
+          const parsedWf = JSON.parse(rawWf);
+          if (parsedWf && typeof parsedWf === 'object') {
+            job.workflow = { ...job.workflow, ...parsedWf };
           }
         } catch {
           // Ignore invalid JSON
@@ -1754,3 +1909,432 @@ export async function importWorkbookFromXlsx(
 
   return { kind: 'job', job, itemCount };
 }
+
+function getIsoWeekKeyForReport(date: Date): string {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+}
+
+function getMonthKeyForReport(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/**
+ * 6) EXPORT PROCUREMENT DASHBOARD REPORT (.xlsx)
+ * Generates a styled 3-sheet executive workbook:
+ *   1. EXECUTIVE SUMMARY (KPIs, RFQ/Tender breakdown, 9-Stage Completion %, Weekly/Monthly Performance)
+ *   2. JOB LIFECYCLE TRACKER (All scoped jobs with stage checkmarks, completion %, and optional financials)
+ *   3. PRIORITY RANKING (Ranked by Est. Profitability or Overall Value)
+ */
+export async function exportDashboardReportXlsx(
+  jobs: ProcurementJob[],
+  registry: RegistryEntry[],
+  themeOrId: ThemeVariantId | ThemePalette,
+  company: CompanyProfile,
+  prefs: DashboardPreferences
+): Promise<string> {
+  const theme = resolveExcelTheme(themeOrId);
+  const fontName = theme.fontName || 'Calibri';
+  const wb = new ExcelJS.Workbook();
+  wb.creator = company.name;
+  wb.created = new Date();
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  const enrichedAll = jobs.map((job) => {
+    const calc = calculateJob(job);
+    const metrics = getJobCompletionMetrics(job);
+    const client = getResolvedEndUser(job) || 'Unassigned Client';
+    const marginPct =
+      calc.goodsSubtotalExVat > 0
+        ? Math.round((calc.grossProfit / calc.goodsSubtotalExVat) * 1000) / 10
+        : 0;
+    return { job, calc, metrics, client, marginPct };
+  });
+
+  const scoped = prefs.includeCompleted
+    ? enrichedAll
+    : enrichedAll.filter((e) => !e.metrics.isComplete);
+
+  const rfqJobs = scoped.filter((e) => e.job.inquiryType !== 'TENDER');
+  const tenderJobs = scoped.filter((e) => e.job.inquiryType === 'TENDER');
+  const totalCount = scoped.length;
+  const completedCount = enrichedAll.filter((e) => e.metrics.isComplete).length;
+  const avgCompletionPct =
+    totalCount > 0
+      ? Math.round(scoped.reduce((s, e) => s + e.metrics.percent, 0) / totalCount)
+      : 0;
+  const rfqValue = rfqJobs.reduce((s, e) => s + e.calc.grandTotal, 0);
+  const tenderValue = tenderJobs.reduce((s, e) => s + e.calc.grandTotal, 0);
+  const totalPipelineValue = rfqValue + tenderValue;
+  const totalEstProfit = scoped.reduce((s, e) => s + e.calc.grossProfit, 0);
+  const primaryCurr = scoped[0]?.job.controls.currency || 'USD';
+
+  // --- SHEET 1: EXECUTIVE SUMMARY ---
+  const wsSummary = wb.addWorksheet('EXECUTIVE SUMMARY', {
+    views: [{ showGridLines: false }],
+    pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  wsSummary.columns = [
+    { width: 2 },
+    { width: 32 },
+    { width: 18 },
+    { width: 18 },
+    { width: 18 },
+    { width: 22 },
+    { width: 22 },
+  ];
+  styleBannerHeader(wb, wsSummary, theme, company, 'PROCUREMENT DASHBOARD REPORT', todayStr, 6);
+
+  // Scope Subtitle
+  wsSummary.getRow(8).height = 20;
+  wsSummary.mergeCells('B8:G8');
+  wsSummary.getCell('B8').value = `Scope: ${prefs.includeCompleted ? 'All Jobs (Including Delivered)' : 'Active In-Progress Jobs Only'}  |  Performance View: ${prefs.performancePeriod === 'weekly' ? 'Last 8 Weeks' : 'Last 6 Months'}  |  Ranking: ${prefs.priorityMetric === 'profit' ? 'By Est. Profitability' : 'By Overall Value'}  |  Financial Figures: ${prefs.showFinancials ? 'Included' : 'Hidden'}`;
+  wsSummary.getCell('B8').font = { name: fontName, size: 9, italic: true, color: { argb: 'FF475569' } };
+
+  // KPI Overview Block
+  wsSummary.getRow(10).height = 24;
+  const kpiHeaders = ['KPI Metric', 'Count / Rate', 'Share / Detail', prefs.showFinancials ? `Value (${primaryCurr})` : 'Value', 'Notes', ''];
+  wsSummary.mergeCells('F10:G10');
+  kpiHeaders.slice(0, 5).forEach((h, i) => {
+    const cell = wsSummary.getCell(10, i + 2);
+    cell.value = h;
+    cell.font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.headerFont } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+    cell.alignment = { vertical: 'middle', horizontal: i === 1 || i === 3 ? 'right' : 'left' };
+  });
+
+  const kpiRows: [string, string | number, string, number | string, string][] = [
+    ['Total Jobs in Scope', totalCount, `${completedCount} of ${enrichedAll.length} fully delivered`, prefs.showFinancials ? totalPipelineValue : 'Hidden', 'All procurement jobs matching active filter'],
+    ['Active RFQs', rfqJobs.length, totalCount > 0 ? `${Math.round((rfqJobs.length / totalCount) * 100)}% of jobs` : '0%', prefs.showFinancials ? rfqValue : 'Hidden', 'Standard RFQ inquiries'],
+    ['Active Tenders', tenderJobs.length, totalCount > 0 ? `${Math.round((tenderJobs.length / totalCount) * 100)}% of jobs` : '0%', prefs.showFinancials ? tenderValue : 'Hidden', 'Formal Tender submissions'],
+    ['Average Stage Completion', `${avgCompletionPct}%`, 'Across 9 lifecycle milestones', prefs.showFinancials ? totalEstProfit : 'Hidden', prefs.showFinancials ? 'Column E shows Est. Gross Profit' : 'Financials hidden by preference'],
+  ];
+
+  kpiRows.forEach((rowVals, idx) => {
+    const r = 11 + idx;
+    wsSummary.getRow(r).height = 22;
+    wsSummary.mergeCells(r, 6, r, 7);
+    rowVals.forEach((v, cIdx) => {
+      const cell = wsSummary.getCell(r, cIdx + 2);
+      cell.value = v;
+      cell.font = { name: fontName, size: 10, bold: cIdx === 0 || cIdx === 1 };
+      if (idx % 2 === 1) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.zebraFill } };
+      }
+      cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+      cell.alignment = { vertical: 'middle', horizontal: cIdx === 1 || cIdx === 3 ? 'right' : 'left' };
+      if (cIdx === 3 && typeof v === 'number') cell.numFmt = '#,##0.00';
+    });
+  });
+
+  // Stage Completion Breakdown Table
+  const stageHeaderRow = 17;
+  wsSummary.getRow(stageHeaderRow).height = 24;
+  ['Lifecycle Stage', 'Completed Jobs', 'Total Jobs', 'Completion %', 'Status Summary', ''].slice(0, 5).forEach((h, i) => {
+    const cell = wsSummary.getCell(stageHeaderRow, i + 2);
+    cell.value = h;
+    cell.font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.headerFont } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+    cell.alignment = { vertical: 'middle', horizontal: i >= 1 && i <= 3 ? 'right' : 'left' };
+  });
+  wsSummary.mergeCells(stageHeaderRow, 6, stageHeaderRow, 7);
+
+  const stageSpecs: { label: string; count: number }[] = [
+    { label: 'Internal Supplier Quote Ready', count: scoped.filter((e) => e.metrics.hasInternalQuote).length },
+    { label: 'Quotation (QT) Issued', count: scoped.filter((e) => e.metrics.hasQT).length },
+    { label: 'Proforma Invoice (PI) Issued', count: scoped.filter((e) => e.metrics.hasPI).length },
+    { label: 'Client PO Confirmed', count: scoped.filter((e) => e.metrics.hasEndUserPoGate).length },
+    { label: 'Supplier PO Issued', count: scoped.filter((e) => e.metrics.hasPO).length },
+    { label: 'Commercial Invoice (CI) Issued', count: scoped.filter((e) => e.metrics.hasCI).length },
+    { label: 'Supplier Paid & PL Confirmed', count: scoped.filter((e) => e.metrics.hasSupplierShipmentGate).length },
+    { label: 'Packing List (PL) Issued', count: scoped.filter((e) => e.metrics.hasPL).length },
+    { label: 'Delivery Note (DN) Issued', count: scoped.filter((e) => e.metrics.hasDN).length },
+  ];
+
+  stageSpecs.forEach((st, idx) => {
+    const r = stageHeaderRow + 1 + idx;
+    const pct = totalCount > 0 ? st.count / totalCount : 0;
+    wsSummary.getRow(r).height = 20;
+    wsSummary.mergeCells(r, 6, r, 7);
+    const vals: (string | number)[] = [
+      st.label,
+      st.count,
+      totalCount,
+      pct,
+      st.count === totalCount && totalCount > 0 ? 'All Jobs Complete' : `${totalCount - st.count} Pending`,
+    ];
+    vals.forEach((v, cIdx) => {
+      const cell = wsSummary.getCell(r, cIdx + 2);
+      cell.value = v;
+      cell.font = { name: fontName, size: 9, bold: cIdx === 0 || cIdx === 3 };
+      if (idx % 2 === 1) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.zebraFill } };
+      }
+      cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+      cell.alignment = { vertical: 'middle', horizontal: cIdx >= 1 && cIdx <= 3 ? 'right' : 'left' };
+      if (cIdx === 3) cell.numFmt = '0%';
+    });
+  });
+
+  // Weekly / Monthly Performance Table
+  const perfStartRow = stageHeaderRow + stageSpecs.length + 3;
+  wsSummary.getRow(perfStartRow).height = 24;
+  wsSummary.mergeCells(perfStartRow, 6, perfStartRow, 7);
+  const perfTitle = prefs.performancePeriod === 'weekly' ? 'Weekly Performance (Last 8 Weeks)' : 'Monthly Performance (Last 6 Months)';
+  [perfTitle, 'Jobs Started', 'Documents Issued', 'Delivered Jobs', 'Notes'].forEach((h, i) => {
+    const cell = wsSummary.getCell(perfStartRow, i + 2);
+    cell.value = h;
+    cell.font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.headerFont } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+    cell.alignment = { vertical: 'middle', horizontal: i >= 1 && i <= 3 ? 'right' : 'left' };
+  });
+
+  const now = new Date();
+  const perfBuckets: { key: string; label: string; jobsStarted: number; docsIssued: number; delivered: number }[] = [];
+  if (prefs.performancePeriod === 'weekly') {
+    for (let i = 7; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(now.getDate() - i * 7);
+      const key = getIsoWeekKeyForReport(d);
+      perfBuckets.push({ key, label: key, jobsStarted: 0, docsIssued: 0, delivered: 0 });
+    }
+    const map = new Map(perfBuckets.map((b) => [b.key, b]));
+    jobs.forEach((j) => {
+      const b = map.get(getIsoWeekKeyForReport(new Date(j.createdAt || j.updatedAt)));
+      if (b) b.jobsStarted += 1;
+      const dn = j.issuedDocs.DN;
+      if (dn && !dn.isVoided) {
+        const bd = map.get(getIsoWeekKeyForReport(new Date(dn.issuedAt)));
+        if (bd) bd.delivered += 1;
+      }
+    });
+    registry.forEach((e) => {
+      if (e.status === 'VOID') return;
+      const b = map.get(getIsoWeekKeyForReport(new Date(e.issuedAt)));
+      if (b) b.docsIssued += 1;
+    });
+  } else {
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = getMonthKeyForReport(d);
+      perfBuckets.push({ key, label: `${monthNames[d.getMonth()]} ${d.getFullYear()}`, jobsStarted: 0, docsIssued: 0, delivered: 0 });
+    }
+    const map = new Map(perfBuckets.map((b) => [b.key, b]));
+    jobs.forEach((j) => {
+      const b = map.get(getMonthKeyForReport(new Date(j.createdAt || j.updatedAt)));
+      if (b) b.jobsStarted += 1;
+      const dn = j.issuedDocs.DN;
+      if (dn && !dn.isVoided) {
+        const bd = map.get(getMonthKeyForReport(new Date(dn.issuedAt)));
+        if (bd) bd.delivered += 1;
+      }
+    });
+    registry.forEach((e) => {
+      if (e.status === 'VOID') return;
+      const b = map.get(getMonthKeyForReport(new Date(e.issuedAt)));
+      if (b) b.docsIssued += 1;
+    });
+  }
+
+  perfBuckets.forEach((b, idx) => {
+    const r = perfStartRow + 1 + idx;
+    wsSummary.getRow(r).height = 20;
+    wsSummary.mergeCells(r, 6, r, 7);
+    const vals: (string | number)[] = [b.label, b.jobsStarted, b.docsIssued, b.delivered, b.docsIssued > 0 ? 'Active' : '—'];
+    vals.forEach((v, cIdx) => {
+      const cell = wsSummary.getCell(r, cIdx + 2);
+      cell.value = v;
+      cell.font = { name: fontName, size: 9, bold: cIdx === 0 };
+      if (idx % 2 === 1) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.zebraFill } };
+      }
+      cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+      cell.alignment = { vertical: 'middle', horizontal: cIdx >= 1 && cIdx <= 3 ? 'right' : 'left' };
+    });
+  });
+
+  // --- SHEET 2: JOB LIFECYCLE TRACKER ---
+  const wsTracker = wb.addWorksheet('JOB LIFECYCLE TRACKER', {
+    views: [{ showGridLines: false, state: 'frozen', ySplit: 8 }],
+    pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+
+  const trackerCols: { header: string; width: number; align: 'left' | 'center' | 'right' }[] = [
+    { header: 'Seq', width: 9, align: 'center' },
+    { header: 'Job Name', width: 26, align: 'left' },
+    { header: 'Type', width: 10, align: 'center' },
+    { header: 'RFQ / Tender Ref', width: 18, align: 'left' },
+    { header: 'Client', width: 26, align: 'left' },
+    { header: 'Stage', width: 18, align: 'left' },
+    { header: 'Completion %', width: 13, align: 'right' },
+    { header: 'Int. Q', width: 9, align: 'center' },
+    { header: 'QT', width: 9, align: 'center' },
+    { header: 'PI', width: 9, align: 'center' },
+    { header: 'PO', width: 9, align: 'center' },
+    { header: 'CI', width: 9, align: 'center' },
+    { header: 'PL', width: 9, align: 'center' },
+    { header: 'DN', width: 9, align: 'center' },
+    ...(prefs.showFinancials
+      ? [
+          { header: 'Currency', width: 10, align: 'center' as const },
+          { header: 'Grand Total', width: 15, align: 'right' as const },
+          { header: 'Est. Profit', width: 15, align: 'right' as const },
+          { header: 'Margin %', width: 11, align: 'right' as const },
+        ]
+      : []),
+  ];
+
+  wsTracker.columns = [{ width: 2 }, ...trackerCols.map((c) => ({ width: c.width }))];
+  styleBannerHeader(wb, wsTracker, theme, company, 'JOB LIFECYCLE TRACKER', todayStr, trackerCols.length);
+
+  wsTracker.getRow(8).height = 24;
+  trackerCols.forEach((col, i) => {
+    const cell = wsTracker.getCell(8, i + 2);
+    cell.value = col.header;
+    cell.font = { name: fontName, size: 9, bold: true, color: { argb: theme.excel.headerFont } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+    cell.alignment = { vertical: 'middle', horizontal: col.align };
+  });
+
+  scoped.forEach((ej, idx) => {
+    const r = 9 + idx;
+    wsTracker.getRow(r).height = 21;
+    const vals: (string | number)[] = [
+      ej.job.jobSequence ? `#${String(ej.job.jobSequence).padStart(3, '0')}` : 'Draft',
+      ej.job.jobName,
+      ej.job.inquiryType === 'TENDER' ? 'TENDER' : 'RFQ',
+      ej.job.controls.rfqRef || '—',
+      ej.client,
+      ej.metrics.currentStageLabel,
+      ej.metrics.percent / 100,
+      ej.metrics.hasInternalQuote ? 'Ready' : '—',
+      ej.metrics.hasQT ? 'Issued' : '—',
+      ej.metrics.hasPI ? 'Issued' : '—',
+      ej.metrics.hasPO ? 'Issued' : ej.metrics.hasEndUserPoGate ? 'Ready' : 'Gate',
+      ej.metrics.hasCI ? 'Issued' : ej.metrics.hasEndUserPoGate ? 'Ready' : 'Gate',
+      ej.metrics.hasPL ? 'Issued' : ej.metrics.hasSupplierShipmentGate ? 'Ready' : 'Gate',
+      ej.metrics.hasDN ? 'Issued' : ej.metrics.hasPL ? 'Ready' : 'Gate',
+      ...(prefs.showFinancials
+        ? [ej.job.controls.currency, ej.calc.grandTotal, ej.calc.grossProfit, ej.marginPct / 100]
+        : []),
+    ];
+
+    vals.forEach((v, cIdx) => {
+      const cell = wsTracker.getCell(r, cIdx + 2);
+      cell.value = v;
+      const isIssuedMark = v === 'Issued' || v === 'Ready';
+      cell.font = {
+        name: fontName,
+        size: 9,
+        bold: cIdx === 0 || cIdx === 1 || isIssuedMark,
+        color: {
+          argb:
+            v === 'Issued'
+              ? 'FF047857'
+              : v === 'Gate'
+              ? 'FFB45309'
+              : theme.excel.formulaFont,
+        },
+      };
+      if (idx % 2 === 1) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.zebraFill } };
+      }
+      cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+      cell.alignment = { vertical: 'middle', horizontal: trackerCols[cIdx].align };
+      if (cIdx === 6) cell.numFmt = '0%';
+      if (prefs.showFinancials && (cIdx === 15 || cIdx === 16)) cell.numFmt = '#,##0.00';
+      if (prefs.showFinancials && cIdx === 17) cell.numFmt = '0.0%';
+    });
+  });
+
+  // --- SHEET 3: PRIORITY RANKING ---
+  const wsRank = wb.addWorksheet('PRIORITY RANKING', {
+    views: [{ showGridLines: false, state: 'frozen', ySplit: 8 }],
+    pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+
+  const ranked = [...scoped].sort((a, b) =>
+    prefs.priorityMetric === 'profit'
+      ? b.calc.grossProfit - a.calc.grossProfit
+      : b.calc.grandTotal - a.calc.grandTotal
+  );
+
+  const rankCols: { header: string; width: number; align: 'left' | 'center' | 'right' }[] = [
+    { header: 'Rank', width: 8, align: 'center' },
+    { header: 'Seq', width: 9, align: 'center' },
+    { header: 'Job Name', width: 28, align: 'left' },
+    { header: 'Type', width: 10, align: 'center' },
+    { header: 'RFQ / Tender Ref', width: 18, align: 'left' },
+    { header: 'Client', width: 28, align: 'left' },
+    { header: 'Stage', width: 18, align: 'left' },
+    { header: 'Completion %', width: 14, align: 'right' },
+    ...(prefs.showFinancials
+      ? [
+          { header: 'Currency', width: 10, align: 'center' as const },
+          { header: 'Est. Profit', width: 16, align: 'right' as const },
+          { header: 'Overall Value', width: 16, align: 'right' as const },
+          { header: 'Margin %', width: 12, align: 'right' as const },
+        ]
+      : []),
+  ];
+
+  wsRank.columns = [{ width: 2 }, ...rankCols.map((c) => ({ width: c.width }))];
+  const rankTitle =
+    prefs.priorityMetric === 'profit'
+      ? 'PRIORITY RANKING — BY EST. PROFITABILITY'
+      : 'PRIORITY RANKING — BY OVERALL VALUE';
+  styleBannerHeader(wb, wsRank, theme, company, rankTitle, todayStr, rankCols.length);
+
+  wsRank.getRow(8).height = 24;
+  rankCols.forEach((col, i) => {
+    const cell = wsRank.getCell(8, i + 2);
+    cell.value = col.header;
+    cell.font = { name: fontName, size: 9, bold: true, color: { argb: theme.excel.headerFont } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+    cell.alignment = { vertical: 'middle', horizontal: col.align };
+  });
+
+  ranked.forEach((ej, idx) => {
+    const r = 9 + idx;
+    wsRank.getRow(r).height = 21;
+    const vals: (string | number)[] = [
+      `#${idx + 1}`,
+      ej.job.jobSequence ? `#${String(ej.job.jobSequence).padStart(3, '0')}` : 'Draft',
+      ej.job.jobName,
+      ej.job.inquiryType === 'TENDER' ? 'TENDER' : 'RFQ',
+      ej.job.controls.rfqRef || '—',
+      ej.client,
+      ej.metrics.currentStageLabel,
+      ej.metrics.percent / 100,
+      ...(prefs.showFinancials
+        ? [ej.job.controls.currency, ej.calc.grossProfit, ej.calc.grandTotal, ej.marginPct / 100]
+        : []),
+    ];
+
+    vals.forEach((v, cIdx) => {
+      const cell = wsRank.getCell(r, cIdx + 2);
+      cell.value = v;
+      cell.font = { name: fontName, size: 9, bold: cIdx === 0 || cIdx === 2 };
+      if (idx % 2 === 1) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.zebraFill } };
+      }
+      cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+      cell.alignment = { vertical: 'middle', horizontal: rankCols[cIdx].align };
+      if (cIdx === 7) cell.numFmt = '0%';
+      if (prefs.showFinancials && (cIdx === 9 || cIdx === 10)) cell.numFmt = '#,##0.00';
+      if (prefs.showFinancials && cIdx === 11) cell.numFmt = '0.0%';
+    });
+  });
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const filename = `GrandGroup_Dashboard_Report_${todayStr}.xlsx`;
+  await triggerDownload(buffer as ArrayBuffer, filename);
+  return filename;
+}
+
