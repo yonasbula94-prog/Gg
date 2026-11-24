@@ -60,8 +60,16 @@ function truncateText(text: string, maxChars: number): string {
   return `${clean.slice(0, Math.max(1, maxChars - 3))}...`;
 }
 
+// Per-character width estimate (Helvetica-like). Capitals are wider than lowercase, so titles are not underestimated.
 function approxTextWidth(text: string, fontSize: number, bold = false): number {
-  return text.length * fontSize * (bold ? 0.56 : 0.52);
+  let em = 0;
+  for (const ch of text) {
+    if (ch === ' ') em += 0.28;
+    else if (ch >= 'A' && ch <= 'Z') em += bold ? 0.72 : 0.68;
+    else if (ch >= '0' && ch <= '9') em += 0.56;
+    else em += bold ? 0.6 : 0.5;
+  }
+  return em * fontSize;
 }
 
 class PdfDocBuilder {
@@ -174,8 +182,7 @@ class PdfDocBuilder {
       this.text(`Page ${idx + 1} of ${total}`, this.pw - this.mg, this.ph - 21, {
         size: 7.5,
         bold: true,
-        color: '#475569',
-        align: 'right',
+        color: "#475569",
       });
       this.current = saved;
     });
@@ -322,18 +329,18 @@ export async function exportDashboardReportPdf(
       `${company.addressLine1}${company.addressLine2 ? ` | ${company.addressLine2}` : ''}`,
       MARGIN + 14,
       51,
-      { size: 7.5, color: '#CBD5E1', maxWidth: 420 }
+      { size: 7.5, color: '#CBD5E1', maxWidth: Math.round(CONTENT_W * 0.5) }
     );
     pdf.text('PROCUREMENT DASHBOARD REPORT', PAGE_W - MARGIN - 14, 34, {
+      align: 'right',
       size: 11,
       bold: true,
-      color: theme.primaryText || '#FFFFFF',
-      align: 'right',
+      color: theme.primaryText || "#FFFFFF",
     });
     pdf.text(subtitle, PAGE_W - MARGIN - 14, 51, {
-      size: 8,
-      color: '#E2E8F0',
       align: 'right',
+      size: 8,
+      color: "#E2E8F0",
     });
     return 82;
   };
@@ -385,7 +392,7 @@ export async function exportDashboardReportPdf(
     cards.forEach((c, idx) => {
       const cx = MARGIN + idx * (cardW + gap);
       pdf.rect(cx, curY, cardW, cardH, '#FFFFFF', '#CBD5E1', 0.7);
-      pdf.text(c.label, cx + 10, curY + 9, { size: 7.5, bold: true, color: '#64748B' });
+      pdf.text(c.label, cx + 10, curY + 9, { size: 7.5, bold: true, color: '#64748B', maxWidth: cardW - 20 });
       pdf.text(c.value, cx + 10, curY + 23, {
         size: 14,
         bold: true,
@@ -406,7 +413,8 @@ export async function exportDashboardReportPdf(
   const showPerf = prefs.showPerformanceChart;
   if (showFunnel || showPerf) {
     const colGap = 12;
-    const twoCol = showFunnel && showPerf;
+    // Portrait stacks the panels; two columns would be too narrow for the chart titles
+    const twoCol = orientation === 'landscape' && showFunnel && showPerf;
     const leftW = twoCol ? (CONTENT_W - colGap) * 0.54 : CONTENT_W;
     const rightW = twoCol ? (CONTENT_W - colGap) * 0.46 : CONTENT_W;
     const panelH = 212;
@@ -503,10 +511,10 @@ export async function exportDashboardReportPdf(
 
       const totalDocsInRange = buckets.reduce((s, b) => s + b.docsIssued, 0);
       pdf.text(`Period Total: ${totalDocsInRange} docs`, rx + rightW - 12, curY + 11, {
+        align: 'right',
         size: 7.5,
         bold: true,
         color: '#475569',
-        align: 'right',
       });
 
       const chartX = rx + 26;
@@ -616,7 +624,7 @@ export async function exportDashboardReportPdf(
           align: 'right',
         });
       }
-      pdf.rect(MARGIN + 34, ry + 11, 360, 4, '#E2E8F0');
+      pdf.rect(MARGIN + 34, ry + 11, Math.round(CONTENT_W * 0.42), 4, '#E2E8F0');
       if (barPct > 0) {
         pdf.rect(
           MARGIN + 34,
@@ -638,7 +646,7 @@ export async function exportDashboardReportPdf(
       curY = drawTopBanner(`Job Lifecycle Tracker | Date: ${todayStr}`);
     }
 
-    const cols: { label: string; w: number; align: 'left' | 'center' | 'right' }[] = [
+    let cols: { label: string; w: number; align: 'left' | 'center' | 'right' }[] = [
       { label: 'Seq', w: 44, align: 'center' },
       { label: 'Job & Client', w: 184, align: 'left' },
       { label: 'Type / RFQ-Tender Ref', w: 112, align: 'left' },
@@ -653,9 +661,16 @@ export async function exportDashboardReportPdf(
       { label: 'DN', w: 38, align: 'center' },
       { label: prefs.showFinancials ? 'Value' : 'Curr', w: 42, align: 'right' },
     ];
-    // Adjust exact width to match CONTENT_W (778)
+    // Portrait: drop the separate Internal Quote column and move the Type/RFQ text under the job name
+    const compactPortrait = orientation === 'portrait';
+    if (compactPortrait) cols = cols.filter((c) => c.label !== 'IntQ' && !c.label.startsWith('Type'));
+    // Scale columns to the page's content width (landscape or portrait)
     const sumW = cols.reduce((s, c) => s + c.w, 0);
-    cols[1].w += CONTENT_W - sumW;
+    const colScale = CONTENT_W / sumW;
+    cols.forEach((c) => {
+      c.w = Math.floor(c.w * colScale * 100) / 100;
+    });
+    cols[1].w += CONTENT_W - cols.reduce((s, c) => s + c.w, 0);
 
     const drawMatrixHeader = (yPos: number): number => {
       pdf.text('JOB LIFECYCLE TRACKER MATRIX', MARGIN, yPos, {
@@ -706,7 +721,14 @@ export async function exportDashboardReportPdf(
             bold: true,
             color: '#0F172A',
           },
-          { text: ej.job.jobName, sub: ej.client, bold: true, color: '#0F172A' },
+          {
+            text: ej.job.jobName,
+            sub: compactPortrait
+              ? `${ej.client} · ${ej.job.inquiryType === 'TENDER' ? 'TENDER' : 'RFQ'} ${ej.job.controls.rfqRef || '-'}`
+              : ej.client,
+            bold: true,
+            color: '#0F172A',
+          },
           {
             text: `${ej.job.inquiryType === 'TENDER' ? 'TENDER' : 'RFQ'} ${ej.job.controls.rfqRef || '-'}`,
             color: '#334155',
@@ -745,8 +767,10 @@ export async function exportDashboardReportPdf(
           },
         ];
 
+        // Keep cells aligned with the columns that are shown
+        const shownCells = compactPortrait ? cells.filter((_, i) => i !== 2 && i !== 5) : cells;
         let x = MARGIN;
-        cells.forEach((cell, cIdx) => {
+        shownCells.forEach((cell, cIdx) => {
           const col = cols[cIdx];
           const tx =
             col.align === 'center' ? x + col.w / 2 : col.align === 'right' ? x + col.w - 4 : x + 5;
@@ -764,7 +788,7 @@ export async function exportDashboardReportPdf(
             });
           } else {
             pdf.text(cell.text, tx, curY + 8, {
-              size: 7.5,
+              size: compactPortrait ? 6.6 : 7.5,
               bold: cell.bold,
               color: cell.color,
               align: col.align,

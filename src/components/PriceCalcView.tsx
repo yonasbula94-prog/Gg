@@ -491,21 +491,21 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
               <thead>
                 <tr style={{ backgroundColor: theme.primary, color: theme.primaryText }}>
                   <th className="py-2.5 px-2.5 text-center font-semibold border-r border-white/15 w-11">Row</th>
-                  <th className="py-2.5 px-3 text-left font-semibold min-w-[200px]">Offered Description</th>
+                  <th className="py-2.5 px-3 text-left font-semibold min-w-[150px]">Offered Description</th>
                   <th className="py-2.5 px-2 text-right font-semibold w-14">Qty</th>
-                  <th className="py-2.5 px-2 text-right font-semibold min-w-[96px]">Supplier Cost</th>
-                  <th className="py-2.5 px-2 text-right font-semibold min-w-[96px]">Total Cost</th>
                   <th className="py-2.5 px-2 text-right font-semibold w-16">Boxes</th>
                   <th className="py-2.5 px-1.5 text-right font-semibold w-16">L (cm)</th>
                   <th className="py-2.5 px-1.5 text-right font-semibold w-16">W (cm)</th>
                   <th className="py-2.5 px-1.5 text-right font-semibold w-16">H (cm)</th>
-                  <th className="py-2.5 px-2 text-right font-semibold w-20">CBM</th>
-                  <th className="py-2.5 px-2 text-right font-semibold w-18">Kg/Box</th>
-                  <th className="py-2.5 px-2 text-right font-semibold w-20">Gross KG</th>
-                  <th className="py-2.5 px-2 text-right font-semibold w-20">10%</th>
-                  <th className="py-2.5 px-2 text-right font-semibold w-20">15%</th>
-                  <th className="py-2.5 px-2 text-right font-semibold w-20">18%</th>
-                  <th className="py-2.5 px-2 text-right font-semibold w-20">20%</th>
+                  <th className="py-2.5 px-2 text-right font-semibold w-16">CBM</th>
+                  <th className="py-2.5 px-2 text-right font-semibold w-16">Kg/Box</th>
+                  <th className="py-2.5 px-2 text-right font-semibold w-16">Gross KG</th>
+                  <th className="py-2.5 px-2 text-right font-semibold min-w-[84px]">Supplier Cost</th>
+                  <th className="py-2.5 px-2 text-right font-semibold min-w-[84px]">Total Cost</th>
+                  <th className="hidden xl:table-cell py-2.5 px-2 text-right font-semibold w-20">10%</th>
+                  <th className="hidden xl:table-cell py-2.5 px-2 text-right font-semibold w-20">15%</th>
+                  <th className="hidden xl:table-cell py-2.5 px-2 text-right font-semibold w-20">18%</th>
+                  <th className="hidden xl:table-cell py-2.5 px-2 text-right font-semibold w-20">20%</th>
                   <th
                     className="py-2.5 px-2.5 text-right font-semibold min-w-[120px]"
                     style={{ backgroundColor: theme.accent }}
@@ -532,25 +532,6 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                       </td>
                       <td className="py-1.5 px-2 text-right text-slate-700">
                         {row.qty !== null ? row.qty : ''}
-                      </td>
-                      <td className="p-1">
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          disabled={isInactive}
-                          value={raw.supplierUnitCost ?? ''}
-                          placeholder={isInactive ? '' : '0.00'}
-                          onChange={(e) =>
-                            guardItem(row.rowNumber, {
-                              supplierUnitCost: parseOptionalNumber(e.target.value),
-                            })
-                          }
-                          className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-2 py-1 text-right text-blue-700 font-medium focus:outline-none disabled:cursor-not-allowed"
-                        />
-                      </td>
-                      <td className="py-1.5 px-2 text-right text-slate-900">
-                        {formatMoney(row.supplierTotalCost)}
                       </td>
                       <td className="p-1">
                         <input
@@ -623,16 +604,35 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                       <td className="py-1.5 px-2 text-right text-slate-700">
                         {row.grossKgCalc !== null ? formatNumber(row.grossKgCalc, 2) : ''}
                       </td>
-                      <td className={`py-1.5 px-2 text-right ${Math.abs(activeMarkup - 0.1) < 0.0001 ? 'font-semibold text-slate-900' : 'text-slate-500'}`}>
+                      <td className="p-1">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          disabled={isInactive}
+                          value={raw.supplierUnitCost ?? ''}
+                          placeholder={isInactive ? '' : '0.00'}
+                          onChange={(e) =>
+                            guardItem(row.rowNumber, {
+                              supplierUnitCost: parseOptionalNumber(e.target.value),
+                            })
+                          }
+                          className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-2 py-1 text-right text-blue-700 font-medium focus:outline-none disabled:cursor-not-allowed"
+                        />
+                      </td>
+                      <td className="py-1.5 px-2 text-right text-slate-900">
+                        {formatMoney(row.supplierTotalCost)}
+                      </td>
+                      <td className={`hidden xl:table-cell py-1.5 px-2 text-right ${Math.abs(activeMarkup - 0.1) < 0.0001 ? "font-semibold text-slate-900" : "text-slate-500"}`}>
                         {formatMoney(row.unitPrice10)}
                       </td>
-                      <td className={`py-1.5 px-2 text-right ${Math.abs(activeMarkup - 0.15) < 0.0001 ? 'font-semibold text-slate-900' : 'text-slate-500'}`}>
+                      <td className={`hidden xl:table-cell py-1.5 px-2 text-right ${Math.abs(activeMarkup - 0.15) < 0.0001 ? "font-semibold text-slate-900" : "text-slate-500"}`}>
                         {formatMoney(row.unitPrice15)}
                       </td>
-                      <td className={`py-1.5 px-2 text-right ${Math.abs(activeMarkup - 0.18) < 0.0001 ? 'font-semibold text-slate-900' : 'text-slate-500'}`}>
+                      <td className={`hidden xl:table-cell py-1.5 px-2 text-right ${Math.abs(activeMarkup - 0.18) < 0.0001 ? "font-semibold text-slate-900" : "text-slate-500"}`}>
                         {formatMoney(row.unitPrice18)}
                       </td>
-                      <td className={`py-1.5 px-2 text-right ${Math.abs(activeMarkup - 0.2) < 0.0001 ? 'font-semibold text-slate-900' : 'text-slate-500'}`}>
+                      <td className={`hidden xl:table-cell py-1.5 px-2 text-right ${Math.abs(activeMarkup - 0.2) < 0.0001 ? "font-semibold text-slate-900" : "text-slate-500"}`}>
                         {formatMoney(row.unitPrice20)}
                       </td>
                       <td
@@ -654,13 +654,13 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                     TOTALS (Rows 17–36)
                   </td>
                   <td className="py-3 px-2 text-right text-slate-900">{calc.totalQty}</td>
-                  <td className="py-3 px-2" />
-                  <td className="py-3 px-2 text-right text-slate-900">{formatMoney(calc.totalSupplierCost)}</td>
                   <td className="py-3 px-2 text-right text-slate-900">{calc.totalBoxes}</td>
                   <td colSpan={3} />
                   <td className="py-3 px-2 text-right text-slate-900">{formatNumber(calc.totalCbm, 4)}</td>
                   <td />
                   <td className="py-3 px-2 text-right text-slate-900">{formatNumber(calc.totalGrossKgCalc, 2)}</td>
+                  <td className="py-3 px-2" />
+                  <td className="py-3 px-2 text-right text-slate-900">{formatMoney(calc.totalSupplierCost)}</td>
                   <td colSpan={4} className="py-3 px-2 text-right font-sans text-slate-600">
                     Customer Goods Subtotal:
                   </td>

@@ -20,7 +20,7 @@ import {
   Truck,
   X,
 } from 'lucide-react';
-import { DOC_META, resolveThemePalette } from './constants/themes';
+import { DOC_META, pageBarColor, resolveThemePalette } from './constants/themes';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { DocumentWorkspaceView } from './components/DocumentWorkspaceView';
 import { ExcelStudioView } from './components/ExcelStudioView';
@@ -1003,7 +1003,10 @@ export default function App() {
       {/* Main Content Shell */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Clean Single-Row Top Bar Contract (Breadcrumb + 1 Primary Action) */}
-        <header className="no-print sticky top-0 z-30 h-16 border-b border-slate-200 bg-white/95 backdrop-blur px-4 sm:px-6 flex items-center justify-between gap-6">
+        <header
+          className="no-print sticky top-0 z-30 h-16 border-b border-slate-200 backdrop-blur px-4 sm:px-6 flex items-center justify-between gap-6"
+          style={{ backgroundColor: pageBarColor(activeTab, theme), color: theme.primaryText }}
+        >
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
@@ -1014,11 +1017,11 @@ export default function App() {
               <Menu className="w-5 h-5" />
             </button>
             <div className="flex items-center gap-2 text-sm min-w-0">
-              <span className="hidden sm:inline text-slate-400 truncate max-w-[200px]">
+              <span className="hidden sm:inline opacity-75 truncate max-w-[200px]">
                 {activeJob.jobName}
               </span>
-              <span className="hidden sm:inline text-slate-300">/</span>
-              <h1 className="font-display font-semibold text-slate-900 truncate">
+              <span className="hidden sm:inline opacity-60">/</span>
+              <h1 className="font-display font-semibold truncate">
                 {TAB_LABELS[activeTab]}
               </h1>
             </div>
@@ -1035,8 +1038,8 @@ export default function App() {
             <button
               type="button"
               onClick={() => quickImportRef.current?.click()}
-              className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90 cursor-pointer min-h-[40px] whitespace-nowrap shrink-0"
-              style={{ backgroundColor: theme.primary }}
+              className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition-opacity hover:opacity-90 cursor-pointer min-h-[40px] whitespace-nowrap shrink-0"
+              style={{ backgroundColor: "#FFFFFF", color: theme.primary }}
             >
               <FolderOpen className="w-3.5 h-3.5" />
               <span>Open .xlsx / .pdf</span>

@@ -374,3 +374,33 @@ export function resolveDocumentColumns(
 
   return result;
 }
+
+function mixHex(a: string, b: string, t: number): string {
+  const parse = (h: string) => {
+    const c = h.replace('#', '');
+    return [0, 2, 4].map((i) => parseInt(c.slice(i, i + 2), 16));
+  };
+  const [ar, ag, ab] = parse(a);
+  const [br, bg, bb] = parse(b);
+  const mix = (x: number, y: number) => Math.round(x + (y - x) * t);
+  return `#${[mix(ar, br), mix(ag, bg), mix(ab, bb)].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/**
+ * Top-bar colour for each page. Derived only from the active theme's own
+ * primary and accent colours, so every page stays inside the theme palette.
+ */
+export function pageBarColor(tab: string, palette: { primary: string; accent: string }): string {
+  switch (tab) {
+    case 'PRICE_CALC':
+      return palette.accent;
+    case 'INTERNAL_QUOTE':
+      return mixHex(palette.primary, palette.accent, 0.4);
+    case 'REGISTRY':
+    case 'FILES':
+    case 'DASHBOARD':
+      return mixHex(palette.primary, '#000000', 0.25);
+    default:
+      return palette.primary;
+  }
+}
