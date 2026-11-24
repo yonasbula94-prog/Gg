@@ -181,8 +181,13 @@ interface TradeCtx {
 type TradeMetaPairs = { left: [string, string][]; right: [string, string][] };
 
 const TRADE_FIRST_ROW = 12; // first item row on the trade sheets
-const TRADE_SLOTS = 20; // item rows mirrored from PROFORMA INVOICE rows 17-36
-const PI_FIRST_ROW = 17;
+const TRADE_SLOTS = 20; // item rows mirrored from PROFORMA INVOICE items
+// Proforma layout: metadata rows 5-10, table header row 12, items rows 13-32, totals rows 33-35
+const PI_HEADER_ROW = 12;
+const PI_FIRST_ROW = 13;
+const PI_SLOTS = 20;
+const PI_TOTAL_ROW = 33;
+const PRICE_CALC_FIRST_ROW = 17; // PRICE CALC item rows
 
 function addTradeWorksheet(wb: ExcelJS.Workbook, prefix: DocPrefix, hasCustomCols: boolean, onePage: boolean): ExcelJS.Worksheet {
   const isLogistics = prefix === 'PL' || prefix === 'DN';
@@ -660,7 +665,7 @@ function renderTradeSheet(
         return piRef('F');
       case 'unit_val':
         return isPO
-          ? { formula: `IF('PRICE CALC'!E${piRow}="","",'PRICE CALC'!E${piRow})` }
+          ? { formula: `IF('PRICE CALC'!E${PRICE_CALC_FIRST_ROW + i}="","",'PRICE CALC'!E${PRICE_CALC_FIRST_ROW + i})` }
           : piRef('G');
       case 'total_val': {
         const qtyL = colLetterOf('qty');
@@ -746,11 +751,11 @@ function renderTradeSheet(
         ctx,
         cursor,
         [
-          { label: 'GOODS SUBTOTAL', value: live ? piRef(38) : calc.goodsSubtotal },
-          { label: freightLabel, value: live ? piRef(39) : calc.customerFreight },
+          { label: 'GOODS SUBTOTAL', value: live ? piRef(PI_TOTAL_ROW) : calc.goodsSubtotal },
+          { label: freightLabel, value: live ? piRef(PI_TOTAL_ROW + 1) : calc.customerFreight },
           {
             label: `GRAND TOTAL (${job.controls.currency})`,
-            value: live ? piRef(40) : calc.grandTotal,
+            value: live ? piRef(PI_TOTAL_ROW + 2) : calc.grandTotal,
             grand: true,
           },
         ],
@@ -813,24 +818,22 @@ export async function exportJobTemplateXlsx(
   wb.creator = company.name;
   wb.created = new Date();
 
-  // --- SHEET 2: PROFORMA INVOICE (Entry sheet, rows 17-36, Controls K:L, TO in C8, VAT in L5) ---
+  // --- SHEET 2: PROFORMA INVOICE (input form) ---
+  // Same layout as the other trade documents: metadata on rows 5-10 (inputs are the value cells),
+  // table header row 12, items rows 13-32, totals rows 33-35. Importer reads it by label and row.
   const wsPI = wb.addWorksheet('PROFORMA INVOICE', {
-    views: [{ showGridLines: false, state: 'frozen', ySplit: 16 }],
+    views: [{ showGridLines: false, state: 'frozen', ySplit: PI_HEADER_ROW }],
     pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
   wsPI.columns = [
     { width: 2 },
     { width: 13 }, // B: No. (wide enough for the logo tile)
     { width: 28 }, // C: Requested Desc
-    { width: 32 }, // D: Offered Desc
-    { width: 9 },  // E: UoM
-    { width: 9 },  // F: Qty
+    { width: 32 }, // D: Offered Desc (also the metadata input column)
+    { width: 9 }, // E: UoM
+    { width: 9 }, // F: Qty
     { width: 15 }, // G: Unit Price
     { width: 16 }, // H: Total Price
-    { width: 3 },  // I: Spacer
-    { width: 3 },  // J: Spacer
-    { width: 18 }, // K: Control Labels
-    { width: 22 }, // L: Control Inputs
   ];
 
   styleBannerHeader(
@@ -842,65 +845,72 @@ export async function exportJobTemplateXlsx(
     includeCurrentData && job.issuedDocs.PI && !job.issuedDocs.PI.isVoided ? job.issuedDocs.PI.docNumber : '',
     7
   );
+  wsPI.getRow(4).height = 8;
 
-  wsPI.getCell('B8').value = 'TO:';
-  wsPI.getCell('B8').font = { name: fontName, size: 10, bold: true, color: { argb: 'FF475569' } };
-  wsPI.getCell('C8').value = includeCurrentData ? job.controls.endUserSelect : company.endUsers[0] || 'AIAA (Asmara International Airport)';
-  wsPI.getCell('C8').font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.inputFont } };
-  const lastEndUserRow = Math.max(2, company.endUsers.length + 1);
-  wsPI.getCell('C8').dataValidation = {
-    type: 'list',
-    allowBlank: true,
-    formulae: [`CONTROLS!$A$2:$A$${lastEndUserRow}`],
+  const piDefault = (value: string, fallback: string) => (includeCurrentData ? value : fallback);
+  const piEndUser = includeCurrentData ? job.controls.endUserSelect : company.endUsers[0] || 'AIAA (Asmara International Airport)';
+  const piLabel = (addr: string, text: string) => {
+    wsPI.getCell(addr).value = text;
+    wsPI.getCell(addr).font = { name: fontName, size: 9, bold: true, color: { argb: 'FF64748B' } };
+    wsPI.getCell(addr).alignment = { horizontal: 'left', vertical: 'middle' };
+  };
+  const piInput = (addr: string, value: string | number, bold = false) => {
+    wsPI.getCell(addr).value = value;
+    wsPI.getCell(addr).font = { name: fontName, size: 10, bold, color: { argb: theme.excel.inputFont } };
+    wsPI.getCell(addr).alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
   };
 
-  wsPI.getCell('B9').value = 'CUSTOM NAME:';
-  wsPI.getCell('B9').font = { name: fontName, size: 9, bold: true, color: { argb: 'FF64748B' } };
-  wsPI.getCell('C9').value = includeCurrentData ? job.controls.customEndUser : '';
-  wsPI.getCell('C9').font = { name: fontName, size: 10, color: { argb: theme.excel.inputFont } };
-
-  wsPI.getCell('B10').value = 'RFQ REF:';
-  wsPI.getCell('C10').value = includeCurrentData ? job.controls.rfqRef : '';
-  wsPI.getCell('B11').value = 'CUSTOMER PO:';
-  wsPI.getCell('C11').value = includeCurrentData ? job.controls.customerPoRef : '';
-
-  // Controls block K2:L7 (End-user safe: NO VAT cell exposed on PI)
-  wsPI.getCell('K2').value = 'JOB CONTROLS';
-  wsPI.getCell('K2').font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.headerFont } };
-  wsPI.getCell('K2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.accentFill } };
-  wsPI.getCell('L2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.accentFill } };
-
-  const piControls: [number, string, string | number][] = [
-    [3, 'Currency', includeCurrentData ? job.controls.currency : 'USD'],
-    [4, 'Incoterm', includeCurrentData ? job.controls.incoterm : 'CIF'],
-    [5, 'Destination', includeCurrentData ? job.controls.destination : 'Massawa Seaport'],
-    [6, 'Payment Terms', includeCurrentData ? job.controls.paymentTerms : '50% Advance with PO, 50% Prior to Shipment'],
-    [7, 'Lead Time', includeCurrentData ? job.controls.deliveryLeadTime : '4–6 Weeks from PO Confirmation'],
+  // Left pairs: label B:C, input D. Right pairs: label E:F, input G:H.
+  const piLeft: [string, string, string | number, boolean][] = [
+    ['TO', 'D5', piEndUser, true],
+    ['CUSTOM NAME', 'D6', includeCurrentData ? job.controls.customEndUser : '', false],
+    ['ATTN / CONTACT', 'D7', includeCurrentData ? job.controls.endUserContact : '', false],
+    ['ADDRESS', 'D8', includeCurrentData ? job.controls.endUserAddress : '', false],
+    ['INCOTERM', 'D9', piDefault(job.controls.incoterm, 'CIF'), false],
+    ['CURRENCY', 'D10', piDefault(job.controls.currency, 'USD'), false],
   ];
-  piControls.forEach(([rowIdx, lbl, val]) => {
-    wsPI.getCell(rowIdx, 11).value = lbl;
-    wsPI.getCell(rowIdx, 11).font = { name: fontName, size: 9, bold: true, color: { argb: 'FF475569' } };
-    wsPI.getCell(rowIdx, 12).value = val;
-    wsPI.getCell(rowIdx, 12).font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.inputFont } };
-    wsPI.getCell(rowIdx, 11).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.subHeaderFill } };
-    wsPI.getCell(rowIdx, 12).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.subHeaderFill } };
-    wsPI.getCell(rowIdx, 11).border = { bottom: thinBorder(theme.excel.borderColor) };
-    wsPI.getCell(rowIdx, 12).border = { bottom: thinBorder(theme.excel.borderColor) };
+  const piRight: [string, string, string | number][] = [
+    ['DATE', 'G5', new Date().toISOString().slice(0, 10)],
+    ['RFQ / TENDER REF', 'G6', includeCurrentData ? job.controls.rfqRef : ''],
+    ['CUSTOMER PO REF', 'G7', includeCurrentData ? job.controls.customerPoRef : ''],
+    ['PAYMENT TERMS', 'G8', piDefault(job.controls.paymentTerms, '50% Advance with PO, 50% Prior to Shipment')],
+    ['LEAD TIME', 'G9', piDefault(job.controls.deliveryLeadTime, '4–6 Weeks from PO Confirmation')],
+    ['DESTINATION', 'G10', piDefault(job.controls.destination, 'Massawa Seaport')],
+  ];
+  piLeft.forEach(([label, addr, value, bold], i) => {
+    const row = 5 + i;
+    wsPI.getRow(row).height = 24;
+    piLabel(`B${row}`, label);
+    piInput(addr, value, bold);
   });
+  piRight.forEach(([label, addr, value], i) => {
+    const row = 5 + i;
+    wsPI.mergeCells(row, 5, row, 6);
+    piLabel(`E${row}`, label);
+    wsPI.mergeCells(row, 7, row, 8);
+    piInput(addr, value);
+    if (i === 0) wsPI.getCell(addr).font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.formulaFont } };
+  });
+  wsPI.getCell('D5').dataValidation = {
+    type: 'list',
+    allowBlank: true,
+    formulae: [`CONTROLS!$A$2:$A$${Math.max(2, company.endUsers.length + 1)}`],
+  };
 
-  // Table header on Row 16 so items sit strictly on Rows 17-36
+  // Table header (row 12)
   const piHeaders = ['No.', 'Requested Description', 'Offered Description', 'UoM', 'Qty', 'Unit Price', 'Total Price'];
-  wsPI.getRow(16).height = 25;
+  wsPI.getRow(PI_HEADER_ROW).height = 25;
   piHeaders.forEach((h, i) => {
-    const cell = wsPI.getCell(16, i + 2);
+    const cell = wsPI.getCell(PI_HEADER_ROW, i + 2);
     cell.value = h;
     cell.font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.headerFont } };
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
     cell.alignment = { vertical: 'middle', horizontal: i === 0 || i === 3 ? 'center' : i >= 4 ? 'right' : 'left' };
   });
 
-  for (let i = 0; i < 20; i++) {
-    const r = 17 + i;
+  for (let i = 0; i < PI_SLOTS; i++) {
+    const r = PI_FIRST_ROW + i;
+    const pc = PRICE_CALC_FIRST_ROW + i; // PRICE CALC keeps rows 17-36
     const item = includeCurrentData ? job.items[i] : null;
     wsPI.getRow(r).height = 22;
 
@@ -910,7 +920,7 @@ export async function exportJobTemplateXlsx(
     wsPI.getCell(r, 5).value = item ? item.uom : '';
     wsPI.getCell(r, 6).value = item && item.qty !== null ? item.qty : null;
     // Unit Price linked strictly from PRICE CALC Col R
-    wsPI.getCell(r, 7).value = { formula: `IF('PRICE CALC'!R${r}="","",'PRICE CALC'!R${r})` };
+    wsPI.getCell(r, 7).value = { formula: `IF('PRICE CALC'!R${pc}="","",'PRICE CALC'!R${pc})` };
     wsPI.getCell(r, 8).value = { formula: `IF(OR(F${r}="",G${r}=""),"",F${r}*G${r})` };
 
     for (let c = 2; c <= 8; c++) {
@@ -936,12 +946,12 @@ export async function exportJobTemplateXlsx(
     wsPI.getCell(r, 8).numFmt = '#,##0.00';
   }
 
-  // PI Totals (Rows 38-40 — ZERO VAT row on customer-facing PI)
+  // PI totals (rows 33-35, ZERO VAT on customer-facing PI)
   const piSummary: [number, string, string, boolean][] = [
-    [38, 'GOODS SUBTOTAL', 'SUM(H17:H36)', false],
+    [PI_TOTAL_ROW, 'GOODS SUBTOTAL', `SUM(H${PI_FIRST_ROW}:H${PI_FIRST_ROW + PI_SLOTS - 1})`, false],
     // Label is a formula so it follows the freight method chosen on PRICE CALC (E5)
-    [39, '="FREIGHT & DOCUMENTATION · "&IF(\'PRICE CALC\'!E5="SEA","SEA","AIR")&" FREIGHT"', "'PRICE CALC'!R41", false],
-    [40, 'GRAND TOTAL', 'H38+H39', true],
+    [PI_TOTAL_ROW + 1, '="FREIGHT & DOCUMENTATION · "&IF(\'PRICE CALC\'!E5="SEA","SEA","AIR")&" FREIGHT"', "'PRICE CALC'!R41", false],
+    [PI_TOTAL_ROW + 2, 'GRAND TOTAL', `H${PI_TOTAL_ROW}+H${PI_TOTAL_ROW + 1}`, true],
   ];
   piSummary.forEach(([r, label, formula, isGrand]) => {
     wsPI.getRow(r).height = isGrand ? 26 : 21;
@@ -1018,14 +1028,15 @@ export async function exportJobTemplateXlsx(
 
   for (let i = 0; i < 20; i++) {
     const r = 13 + i;
-    const piR = 17 + i;
+    const piR = PI_FIRST_ROW + i;
+    const pcR = PRICE_CALC_FIRST_ROW + i;
     wsIQ.getRow(r).height = 22;
     wsIQ.getCell(r, 2).value = { formula: `IF('PROFORMA INVOICE'!B${piR}="","",'PROFORMA INVOICE'!B${piR})` };
     wsIQ.getCell(r, 3).value = { formula: `IF('PROFORMA INVOICE'!C${piR}="","",'PROFORMA INVOICE'!C${piR})` };
     wsIQ.getCell(r, 4).value = { formula: `IF('PROFORMA INVOICE'!D${piR}="","",'PROFORMA INVOICE'!D${piR})` };
     wsIQ.getCell(r, 5).value = { formula: `IF('PROFORMA INVOICE'!E${piR}="","",'PROFORMA INVOICE'!E${piR})` };
     wsIQ.getCell(r, 6).value = { formula: `IF('PROFORMA INVOICE'!F${piR}="","",'PROFORMA INVOICE'!F${piR})` };
-    wsIQ.getCell(r, 7).value = { formula: `IF('PRICE CALC'!E${piR}="","",'PRICE CALC'!E${piR})` };
+    wsIQ.getCell(r, 7).value = { formula: `IF('PRICE CALC'!E${pcR}="","",'PRICE CALC'!E${pcR})` };
     wsIQ.getCell(r, 8).value = { formula: `IF(OR(F${r}="",G${r}=""),"",F${r}*G${r})` };
     for (let c = 2; c <= 8; c++) {
       const cell = wsIQ.getCell(r, c);
@@ -1141,9 +1152,9 @@ export async function exportJobTemplateXlsx(
     const item = includeCurrentData ? job.items[i] : null;
     wsPC.getRow(r).height = 22;
 
-    wsPC.getCell(r, 2).value = { formula: `IF('PROFORMA INVOICE'!B${r}="","",'PROFORMA INVOICE'!B${r})` };
-    wsPC.getCell(r, 3).value = { formula: `IF('PROFORMA INVOICE'!D${r}="","",'PROFORMA INVOICE'!D${r})` };
-    wsPC.getCell(r, 4).value = { formula: `IF('PROFORMA INVOICE'!F${r}="","",'PROFORMA INVOICE'!F${r})` };
+    wsPC.getCell(r, 2).value = { formula: `IF('PROFORMA INVOICE'!B${r - 4}="","",'PROFORMA INVOICE'!B${r - 4})` };
+    wsPC.getCell(r, 3).value = { formula: `IF('PROFORMA INVOICE'!D${r - 4}="","",'PROFORMA INVOICE'!D${r - 4})` };
+    wsPC.getCell(r, 4).value = { formula: `IF('PROFORMA INVOICE'!F${r - 4}="","",'PROFORMA INVOICE'!F${r - 4})` };
     wsPC.getCell(r, 5).value = item && item.supplierUnitCost !== null ? item.supplierUnitCost : null;
     wsPC.getCell(r, 6).value = { formula: `IF(OR(D${r}="",E${r}=""),"",D${r}*E${r})` };
     wsPC.getCell(r, 7).value = item && item.boxes !== null ? item.boxes : null;
@@ -1266,13 +1277,13 @@ export async function exportJobTemplateXlsx(
     templateCustomCols.forEach((cc, cIdx) => {
       const colNum = 14 + cIdx; // Col N onwards on PI (right of K:L controls)
       wsPI.getColumn(colNum).width = 16;
-      const hdr = wsPI.getCell(16, colNum);
+      const hdr = wsPI.getCell(PI_HEADER_ROW, colNum);
       hdr.value = cc.label;
       hdr.font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.headerFont } };
       hdr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.accentFill } };
       hdr.alignment = { vertical: 'middle', horizontal: 'left' };
-      for (let i = 0; i < 20; i++) {
-        const r = 17 + i;
+      for (let i = 0; i < PI_SLOTS; i++) {
+        const r = PI_FIRST_ROW + i;
         const val = job.items[i]?.customFields?.[cc.id] || '';
         const cell = wsPI.getCell(r, colNum);
         cell.value = val;
@@ -1309,7 +1320,7 @@ export async function exportJobTemplateXlsx(
     const extraCount = templateCustomCols.length;
     const ws = wb.addWorksheet(meta.sheetName, {
       views: [{ showGridLines: false, state: 'frozen', ySplit: 16 }],
-      pageSetup: { paperSize: 9, orientation: isLogistics || extraCount > 0 ? 'landscape' : 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+      pageSetup: { paperSize: 9, orientation: isLogistics || extraCount > 0 ? 'landscape' : 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 1 },
     });
 
     interface DsColSpec {
@@ -1343,6 +1354,7 @@ export async function exportJobTemplateXlsx(
       ...dsCustom('after_qty'),
       ...(isLogistics
         ? ([
+            { key: 'packages', header: 'Packages (boxes · L×W×H cm)', width: 24, align: 'center' },
             { key: 'carton', header: 'Carton No.', width: 15, align: 'center', isInput: true },
             { key: 'netWt', header: 'Net Wt (KG)', width: 14, align: 'right', isInput: true, numFmt: '#,##0.00' },
             { key: 'grossWt', header: 'Gross Wt (KG)', width: 14, align: 'right', isInput: true, numFmt: '#,##0.00' },
@@ -1362,10 +1374,12 @@ export async function exportJobTemplateXlsx(
         : '';
     styleBannerHeader(wb, ws, theme, company, meta.title, docNo, dsSpecs.length);
 
-    ws.getCell('B8').value = meta.recipientLabel;
-    ws.getCell('B8').font = { name: fontName, size: 9, bold: true, color: { argb: 'FF64748B' } };
-    ws.getCell('C8').value = { formula: `IF('PROFORMA INVOICE'!C8="OTHER",'PROFORMA INVOICE'!C9,'PROFORMA INVOICE'!C8)` };
-    ws.getCell('C8').font = { name: fontName, size: 10, bold: true };
+    // Metadata block rows 5-9, as on the other trade documents. Rows 10-15 are spacing; the table stays on row 16.
+    writeTradeMetaBlock(
+      { ws, theme, fontName, lastCol: dsSpecs.length + 1 },
+      tradeMetaPairs(job, company, prefix, getResolvedEndUser(job) || '—', job.issuedDocs[prefix], calculateJob(job), includeCurrentData)
+    );
+    for (let r = 10; r <= 15; r++) ws.getRow(r).height = 6;
 
     const dsColNum = (key: string) => dsSpecs.findIndex((s) => s.key === key) + 2;
     const qtyCol = dsColNum('qty');
@@ -1381,7 +1395,7 @@ export async function exportJobTemplateXlsx(
       cell.value = spec.header;
       cell.font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.headerFont } };
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
-      cell.alignment = { vertical: 'middle', horizontal: spec.align };
+      cell.alignment = { vertical: 'middle', horizontal: spec.align, wrapText: true };
     });
 
     for (let i = 0; i < 20; i++) {
@@ -1393,19 +1407,22 @@ export async function exportJobTemplateXlsx(
         const c = idx + 2;
         const cell = ws.getCell(r, c);
         if (spec.key === 'no') {
-          cell.value = { formula: `IF('PROFORMA INVOICE'!B${r}="","",'PROFORMA INVOICE'!B${r})` };
+          cell.value = { formula: `IF('PROFORMA INVOICE'!B${r - 4}="","",'PROFORMA INVOICE'!B${r - 4})` };
         } else if (spec.piCustomLetter) {
           cell.value = {
-            formula: `IF('PROFORMA INVOICE'!${spec.piCustomLetter}${r}="","",'PROFORMA INVOICE'!${spec.piCustomLetter}${r})`,
+            formula: `IF('PROFORMA INVOICE'!${spec.piCustomLetter}${r - 4}="","",'PROFORMA INVOICE'!${spec.piCustomLetter}${r - 4})`,
           };
         } else if (spec.key === 'requested') {
-          cell.value = { formula: `IF('PROFORMA INVOICE'!C${r}="","",'PROFORMA INVOICE'!C${r})` };
+          cell.value = { formula: `IF('PROFORMA INVOICE'!C${r - 4}="","",'PROFORMA INVOICE'!C${r - 4})` };
         } else if (spec.key === 'offered') {
-          cell.value = { formula: `IF('PROFORMA INVOICE'!D${r}="","",'PROFORMA INVOICE'!D${r})` };
+          cell.value = { formula: `IF('PROFORMA INVOICE'!D${r - 4}="","",'PROFORMA INVOICE'!D${r - 4})` };
         } else if (spec.key === 'uom') {
-          cell.value = { formula: `IF('PROFORMA INVOICE'!E${r}="","",'PROFORMA INVOICE'!E${r})` };
+          cell.value = { formula: `IF('PROFORMA INVOICE'!E${r - 4}="","",'PROFORMA INVOICE'!E${r - 4})` };
         } else if (spec.key === 'qty') {
-          cell.value = { formula: `IF('PROFORMA INVOICE'!F${r}="","",'PROFORMA INVOICE'!F${r})` };
+          cell.value = { formula: `IF('PROFORMA INVOICE'!F${r - 4}="","",'PROFORMA INVOICE'!F${r - 4})` };
+        } else if (spec.key === 'packages') {
+          const plRow = includeCurrentData ? calculateJob(job).rows[i] : undefined;
+          cell.value = plRow && plRow.boxes ? `${plRow.boxes} pkg${plRow.boxDims ? ` · ${plRow.boxDims}` : ''}` : '';
         } else if (spec.key === 'carton') {
           cell.value = item ? item.cartonNo : '';
         } else if (spec.key === 'netWt') {
@@ -1413,7 +1430,7 @@ export async function exportJobTemplateXlsx(
         } else if (spec.key === 'grossWt') {
           cell.value = item && item.grossWtKg !== null ? item.grossWtKg : null;
         } else if (spec.key === 'price') {
-          cell.value = { formula: `IF('PROFORMA INVOICE'!G${r}="","",'PROFORMA INVOICE'!G${r})` };
+          cell.value = { formula: `IF('PROFORMA INVOICE'!G${r - 4}="","",'PROFORMA INVOICE'!G${r - 4})` };
         } else if (spec.key === 'total') {
           cell.value = { formula: `IF(OR(${qtyLet}${r}="",${priceLet}${r}=""),"",${qtyLet}${r}*${priceLet}${r})` };
         }
@@ -1429,6 +1446,25 @@ export async function exportJobTemplateXlsx(
         cell.alignment = { vertical: 'middle', horizontal: spec.align };
       });
     }
+
+    // Totals row under the items: quantity, cartons, net and gross weight
+    const plCalc = calculateJob(job);
+    const plColOf = (key: string) => dsSpecs.findIndex((x) => x.key === key) + 2;
+    const plSum = (key: string): ExcelJS.CellValue => {
+      const col = plColOf(key);
+      return col >= 2 ? { formula: `SUM(${colToLetter(col)}17:${colToLetter(col)}36)` } : '';
+    };
+    writeLogisticsTotals(
+      { ws, theme, fontName, lastCol: dsSpecs.length + 1 },
+      37,
+      { qty: plColOf('qty'), carton: plColOf('carton'), netWt: plColOf('netWt'), grossWt: plColOf('grossWt') },
+      {
+        qty: plSum('qty'),
+        cartons: includeCurrentData ? `${plCalc.totalBoxes} CTNS` : '',
+        net: plSum('netWt'),
+        gross: plSum('grossWt'),
+      }
+    );
   }
 
   // --- SHEET 9: CONTROLS (End Users + Server Paths + Lossless Job Metadata & Custom Column Layout) ---
@@ -1868,7 +1904,13 @@ export async function importWorkbookFromXlsx(
   }
 
   if (wsPI) {
-    const toVal = cellToString(wsPI.getCell('C8').value);
+    // Three proforma layouts: legacy (TO: in B8, items from row 17), values-only export (headers on row 11)
+    // and the current layout (headers on row 12, items from row 13). Detected from the sheet itself.
+    const piLegacy = cellToString(wsPI.getCell('B8').value) === 'TO:';
+    const piValuesLayout = !piLegacy && cellToString(wsPI.getCell(11, 2).value) === 'No.';
+    const piHeaderRow = piLegacy ? 16 : piValuesLayout ? 11 : PI_HEADER_ROW;
+    const piItemStart = piHeaderRow + 1;
+    const toVal = cellToString(wsPI.getCell(piLegacy ? 'C8' : 'D5').value);
     if (toVal) {
       if (knownEndUsers.includes(toVal) || END_USER_OPTIONS.includes(toVal)) {
         job.controls.endUserSelect = toVal;
@@ -1877,13 +1919,61 @@ export async function importWorkbookFromXlsx(
         job.controls.customEndUser = toVal;
       }
     }
-    const customName = cellToString(wsPI.getCell('C9').value);
+    const customName = cellToString(wsPI.getCell(piLegacy ? 'C9' : 'D6').value);
     if (customName && job.controls.endUserSelect === 'OTHER') {
       job.controls.customEndUser = customName;
     }
-    const rfqVal = cellToString(wsPI.getCell('C10').value);
+    const rfqVal = cellToString(wsPI.getCell(piLegacy ? 'C10' : 'G6').value);
     if (rfqVal && !job.controls.rfqRef) job.controls.rfqRef = rfqVal;
-    const poVal = cellToString(wsPI.getCell('C11').value);
+    const poVal = cellToString(wsPI.getCell(piLegacy ? 'C11' : 'G7').value);
+    if (!piLegacy) {
+      // Current layout: metadata inputs are labelled cells on rows 5-10 (label in B or E, value in D or G).
+      // The proforma is the input form, so these values take effect when non-empty.
+      for (let r = 5; r <= 10; r++) {
+        const pairs: [string, ExcelJS.CellValue][] = [
+          [cellToString(wsPI.getCell(r, 2).value), wsPI.getCell(r, 4).value],
+          [cellToString(wsPI.getCell(r, 5).value), wsPI.getCell(r, 7).value],
+        ];
+        for (const [rawLabel, value] of pairs) {
+          const text = cellToString(value);
+          if (!text) continue;
+          switch (rawLabel.trim().toLowerCase()) {
+            case 'custom name':
+              if (job.controls.endUserSelect === 'OTHER') job.controls.customEndUser = text;
+              break;
+            case 'attn / contact':
+              job.controls.endUserContact = text;
+              break;
+            case 'address':
+              job.controls.endUserAddress = text;
+              break;
+            case 'incoterm':
+              job.controls.incoterm = text;
+              break;
+            case 'currency':
+              job.controls.currency = text;
+              break;
+            case 'destination':
+              job.controls.destination = text;
+              break;
+            case 'payment terms':
+              job.controls.paymentTerms = text;
+              break;
+            case 'lead time':
+              job.controls.deliveryLeadTime = text;
+              break;
+            case 'rfq / tender ref':
+              job.controls.rfqRef = text;
+              break;
+            case 'customer po ref':
+              job.controls.customerPoRef = text;
+              break;
+            default:
+              break;
+          }
+        }
+      }
+    }
     if (poVal && !job.controls.customerPoRef) job.controls.customerPoRef = poVal;
 
     // Read K3:L7 controls dynamically by label (handles both current VAT-free PI and legacy v1 PI!L5 VAT)
@@ -1914,10 +2004,10 @@ export async function importWorkbookFromXlsx(
       }
     }
 
-    // Parse rows 17..36 (standard template rows)
+    // Parse the item rows (standard template: rows 17-36 legacy, 13-32 current; values export uses the fallback below)
     let foundRows = 0;
-    for (let i = 0; i < 20; i++) {
-      const r = 17 + i;
+    for (let i = 0; i < 20 && !piValuesLayout; i++) {
+      const r = piItemStart + i;
       const reqDesc = cellToString(wsPI.getCell(r, 3).value);
       const offDesc = cellToString(wsPI.getCell(r, 4).value);
       const uom = cellToString(wsPI.getCell(r, 5).value);
@@ -1975,7 +2065,7 @@ export async function importWorkbookFromXlsx(
     // Read any custom columns stored in Col N+ (colNum 14..17) on template PI, restoring exact positions from CONTROLS
     const importedCustomCols: CustomColumnDef[] = [];
     for (let cNum = 14; cNum <= 17; cNum++) {
-      const hdr = cellToString(wsPI.getCell(16, cNum).value);
+      const hdr = piValuesLayout ? '' : cellToString(wsPI.getCell(piHeaderRow, cNum).value);
       if (hdr) {
         const savedMeta = ctrlColLayout.get(hdr.toLowerCase());
         const id =
@@ -1983,7 +2073,7 @@ export async function importWorkbookFromXlsx(
         const position: CustomColumnPosition = savedMeta?.position || 'after_no';
         importedCustomCols.push({ id, label: hdr, position });
         for (let i = 0; i < 20; i++) {
-          const val = cellToString(wsPI.getCell(17 + i, cNum).value);
+          const val = cellToString(wsPI.getCell(piItemStart + i, cNum).value);
           if (val) {
             job.items[i] = {
               ...job.items[i],
