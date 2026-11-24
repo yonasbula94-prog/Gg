@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import ExcelJS from 'exceljs';
 import { FileSpreadsheet, Printer, Upload } from 'lucide-react';
+import { CURRENCY_OPTIONS, INCOTERM_OPTIONS } from '../constants/themes';
 import { exportSupplierRfqXlsx } from '../utils/excelEngine';
 import { CompanyProfile, ProcurementJob, SupplierRfqData, ThemePalette } from '../types/procurement';
 import { ParsedQuoteItem, parseGenericSupplierXlsx, parseSupplierPdfFile } from '../utils/supplierQuoteParser';
@@ -39,6 +40,9 @@ export const SupplierRfqView: React.FC<SupplierRfqViewProps> = ({
     responseDueDate: '',
     showEndUser: false,
     sourceName: '',
+    currency: '',
+    incoterm: '',
+    destination: '',
   };
   const [uploaded, setUploaded] = useState<ParsedQuoteItem[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -49,7 +53,9 @@ export const SupplierRfqView: React.FC<SupplierRfqViewProps> = ({
   const rfqNumber =
     rfq.rfqNumber || (job.jobSequence ? `SRFQ-${String(job.jobSequence).padStart(3, '0')}` : 'SRFQ-—');
   const endUser = job.controls.endUserSelect === 'OTHER' ? job.controls.customEndUser : job.controls.endUserSelect;
-  const currency = job.controls.currency || 'USD';
+  const currency = rfq.currency || job.controls.currency || 'USD';
+  const incoterm = rfq.incoterm || job.controls.incoterm || '';
+  const destination = rfq.destination || job.controls.destination || '';
 
   const handleFile = async (file: File) => {
     setBusy(true);
@@ -185,6 +191,31 @@ export const SupplierRfqView: React.FC<SupplierRfqViewProps> = ({
           {field('Supplier contact person', rfq.supplierContact, (v) => onUpdateRfq({ supplierContact: v }))}
           {field('Supplier address', rfq.supplierAddress, (v) => onUpdateRfq({ supplierAddress: v }))}
           {field('Supplier email', rfq.supplierEmail, (v) => onUpdateRfq({ supplierEmail: v }))}
+          <label className="block space-y-1">
+            <span className="text-xs font-medium text-slate-600">Currency</span>
+            <select
+              value={rfq.currency || job.controls.currency || 'USD'}
+              onChange={(e) => onUpdateRfq({ currency: e.target.value })}
+              className="w-full min-h-[38px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
+            >
+              {CURRENCY_OPTIONS.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block space-y-1">
+            <span className="text-xs font-medium text-slate-600">Incoterm</span>
+            <select
+              value={rfq.incoterm || job.controls.incoterm || ''}
+              onChange={(e) => onUpdateRfq({ incoterm: e.target.value })}
+              className="w-full min-h-[38px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
+            >
+              {INCOTERM_OPTIONS.map((inc) => (
+                <option key={inc} value={inc}>{inc}</option>
+              ))}
+            </select>
+          </label>
+          {field('Delivery destination', rfq.destination || job.controls.destination, (v) => onUpdateRfq({ destination: v }))}
           {field('RFQ number', rfq.rfqNumber, (v) => onUpdateRfq({ rfqNumber: v }), rfqNumber)}
           <label className="block space-y-1">
             <span className="text-xs font-medium text-slate-600">Quotes due by</span>
@@ -246,7 +277,7 @@ export const SupplierRfqView: React.FC<SupplierRfqViewProps> = ({
 
         <p className="text-sm">
           Please quote for the items below. Quote unit price and total in <strong>{currency}</strong>, delivered{' '}
-          <strong>{job.controls.incoterm} {job.controls.destination}</strong>, with lead time, validity and country of origin.
+          <strong>{incoterm} {destination}</strong>, with lead time, validity and country of origin.
           Include certificates of analysis or safety data sheets where they apply.
         </p>
 
