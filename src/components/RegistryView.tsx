@@ -39,7 +39,7 @@ interface RegistryViewProps {
   onVoidEntry: (docNumber: string, reason: string) => void;
   onSyncRegistryEntries: (entries: RegistryEntry[]) => void;
   onResetRegistry: () => void;
-  onExportAuditLog: () => void;
+  onExportAuditLog: (format: 'json' | 'csv' | 'xlsx') => void;
   onRequestConfirm: (req: ConfirmDialogRequest) => void;
   onNotify: (msg: string) => void;
 }
@@ -380,10 +380,24 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
       <div className="flex justify-end">
         <button
           type="button"
-          onClick={onExportAuditLog}
+          onClick={() => onExportAuditLog('csv')}
           className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer min-h-[40px]"
         >
-          <span>Export Change Log (.json)</span>
+          <span>Change log (.csv)</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onExportAuditLog('xlsx')}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer min-h-[40px]"
+        >
+          <span>Change log (.xlsx)</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onExportAuditLog('json')}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer min-h-[40px]"
+        >
+          <span>Change log (.json)</span>
         </button>
       </div>
 

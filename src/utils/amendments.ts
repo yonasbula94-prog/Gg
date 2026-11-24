@@ -95,3 +95,30 @@ export function purgeRevisionHistory(jobs: ProcurementJob[]): ProcurementJob[] {
   });
   return changed ? next : jobs;
 }
+
+const AUDIT_COLUMNS: { key: keyof import('../types/procurement').AuditEntry; label: string }[] = [
+  { key: 'at', label: 'Date/Time (UTC)' },
+  { key: 'docNumber', label: 'Document No.' },
+  { key: 'prefix', label: 'Type' },
+  { key: 'revision', label: 'Revision' },
+  { key: 'jobName', label: 'Job' },
+  { key: 'field', label: 'Field changed' },
+  { key: 'from', label: 'Old value' },
+  { key: 'to', label: 'New value' },
+  { key: 'reason', label: 'Reason' },
+];
+
+/** RFC 4180 CSV. A UTF-8 BOM is added so Excel opens accented text correctly. */
+export function auditLogToCsv(entries: import('../types/procurement').AuditEntry[]): string {
+  const esc = (v: unknown) => {
+    const s = v === null || v === undefined ? '' : String(v);
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [AUDIT_COLUMNS.map((c) => esc(c.label)).join(',')];
+  for (const e of entries) {
+    lines.push(AUDIT_COLUMNS.map((c) => esc(e[c.key])).join(','));
+  }
+  return '﻿' + lines.join('\r\n') + '\r\n';
+}
+
+export const AUDIT_EXPORT_COLUMNS = AUDIT_COLUMNS;

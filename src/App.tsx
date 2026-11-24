@@ -62,7 +62,8 @@ import {
   verifyAdminPassword,
 } from './store/storage';
 import { AmendmentDialog } from './components/AmendmentDialog';
-import { diffJobs, isJobLocked, purgeRevisionHistory } from './utils/amendments';
+import { auditLogToCsv, diffJobs, isJobLocked, purgeRevisionHistory } from './utils/amendments';
+import { exportAuditLogXlsx } from './utils/excelEngine';
 import { shareOrDownloadBlob } from './utils/platform';
 import {
   CompanyProfile,
@@ -775,13 +776,20 @@ export default function App() {
     setAmendDialog(null);
   };
 
-  const handleExportAuditLog = async () => {
+  const handleExportAuditLog = async (format: 'json' | 'csv' | 'xlsx') => {
     const entries = loadAuditLog();
-    const payload = { exportedAt: new Date().toISOString(), entries };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const filename = `GG_Audit_Log_${new Date().toISOString().slice(0, 10)}.json`;
-    await shareOrDownloadBlob(blob, filename, 'application/json');
-    showToast(`Exported ${entries.length} audit log entries.`);
+    const day = new Date().toISOString().slice(0, 10);
+    if (format === 'xlsx') {
+      await exportAuditLogXlsx(entries, company);
+    } else if (format === 'csv') {
+      const blob = new Blob([auditLogToCsv(entries)], { type: 'text/csv;charset=utf-8' });
+      await shareOrDownloadBlob(blob, `GG_Audit_Log_${day}.csv`, 'text/csv');
+    } else {
+      const payload = { exportedAt: new Date().toISOString(), entries };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      await shareOrDownloadBlob(blob, `GG_Audit_Log_${day}.json`, 'application/json');
+    }
+    showToast(`Exported ${entries.length} audit log entries (${format.toUpperCase()}).`);
   };
 
   const handleRestoreBackup = (

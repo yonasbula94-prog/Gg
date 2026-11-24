@@ -6,6 +6,7 @@ import {
   resolveDocumentColumns,
 } from '../constants/themes';
 import {
+  AuditEntry,
   CompanyProfile,
   ComputedRow,
   CustomColumnDef,
@@ -2305,3 +2306,35 @@ export async function exportDashboardReportXlsx(
   return filename;
 }
 
+
+/** Change log for issued documents, one row per field change. */
+export async function exportAuditLogXlsx(
+  entries: AuditEntry[],
+  company: CompanyProfile
+): Promise<string> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = company.name;
+  wb.created = new Date();
+  const ws = wb.addWorksheet('CHANGE LOG', { views: [{ state: 'frozen', ySplit: 1 }] });
+  const cols = [
+    { header: 'Date/Time (UTC)', key: 'at', width: 22 },
+    { header: 'Document No.', key: 'docNumber', width: 20 },
+    { header: 'Type', key: 'prefix', width: 8 },
+    { header: 'Revision', key: 'revision', width: 10 },
+    { header: 'Job', key: 'jobName', width: 30 },
+    { header: 'Field changed', key: 'field', width: 36 },
+    { header: 'Old value', key: 'from', width: 24 },
+    { header: 'New value', key: 'to', width: 24 },
+    { header: 'Reason', key: 'reason', width: 46 },
+  ];
+  ws.columns = cols;
+  const header = ws.getRow(1);
+  header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+  entries.forEach((e) => ws.addRow(e));
+  ws.autoFilter = { from: 'A1', to: 'I1' };
+  const buffer = await wb.xlsx.writeBuffer();
+  const filename = `GG_Audit_Log_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  await triggerDownload(buffer as ArrayBuffer, filename);
+  return filename;
+}
