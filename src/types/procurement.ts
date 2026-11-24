@@ -6,13 +6,8 @@ export type ThemeVariantId = 'v1' | 'v3';
 
 export type InquiryType = 'RFQ' | 'TENDER';
 
-export type DocumentFontId =
-  | 'Calibri'
-  | 'Arial'
-  | 'Georgia'
-  | 'Segoe UI'
-  | 'Times New Roman'
-  | 'Verdana';
+// A preset name or any font family installed on the device (validated with SAFE_FONT_NAME)
+export type DocumentFontId = string;
 
 export interface ThemeCustomization {
   primary?: string;

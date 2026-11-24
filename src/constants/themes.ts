@@ -74,6 +74,19 @@ export const DOCUMENT_FONT_OPTIONS: {
   { id: 'Verdana', label: 'Verdana (Wide Readable)', cssStack: "'Verdana', Geneva, sans-serif" },
 ];
 
+// Font family names accepted from the device font list or saved settings
+export const SAFE_FONT_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,59}$/;
+
+/** Preset font, or a device font by name (falls back to Calibri when the name is not usable). */
+export function resolveDocumentFont(id: string | undefined): { id: string; label: string; cssStack: string } {
+  const preset = DOCUMENT_FONT_OPTIONS.find((f) => f.id === id);
+  if (preset) return preset;
+  if (id && SAFE_FONT_NAME.test(id)) {
+    return { id, label: id, cssStack: `'${id}', system-ui, sans-serif` };
+  }
+  return DOCUMENT_FONT_OPTIONS[0];
+}
+
 export const DEFAULT_PRICING_COLUMN_ORDER: string[] = [
   'requested',
   'offered',
@@ -257,8 +270,7 @@ export function resolveThemePalette(
     ? custom.secondaryBg.toUpperCase()
     : base.secondaryBg;
 
-  const fontMeta =
-    DOCUMENT_FONT_OPTIONS.find((f) => f.id === custom.fontFamily) || DOCUMENT_FONT_OPTIONS[0];
+  const fontMeta = resolveDocumentFont(custom.fontFamily);
 
   const primaryText = isValidHexColor(custom.headerText)
     ? custom.headerText.toUpperCase()
