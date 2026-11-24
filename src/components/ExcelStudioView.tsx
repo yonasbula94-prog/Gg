@@ -17,7 +17,7 @@ import {
   Unlock,
   Upload,
 } from 'lucide-react';
-import { DOCUMENT_FONT_OPTIONS, EXCEL_THEMES } from '../constants/themes';
+import { DOCUMENT_FONT_OPTIONS, EXCEL_THEMES, SAFE_FONT_NAME } from '../constants/themes';
 import {
   hasCustomAdminPassword,
   saveCompanyProfile,
@@ -78,6 +78,23 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
     hasCustomAdminPassword()
   );
   const [showThemeEditor, setShowThemeEditor] = useState(false);
+  const [deviceFonts, setDeviceFonts] = useState<string[]>([]);
+  const [fontNote, setFontNote] = useState('');
+  const canUseDeviceFonts = typeof window !== 'undefined' && 'queryLocalFonts' in window;
+  const loadDeviceFonts = async () => {
+    setFontNote('');
+    try {
+      const w = window as unknown as { queryLocalFonts: () => Promise<{ family: string }[]> };
+      const fonts = await w.queryLocalFonts();
+      const names = Array.from(new Set(fonts.map((f) => f.family)))
+        .filter((n) => SAFE_FONT_NAME.test(n))
+        .sort((a, b) => a.localeCompare(b));
+      setDeviceFonts(names);
+      setFontNote(`${names.length} fonts found on this device.`);
+    } catch {
+      setFontNote('Font access was not allowed. Allow local fonts for this site in browser settings, then try again.');
+    }
+  };
   const [hexDrafts, setHexDrafts] = useState<Record<string, string>>({});
 
   const logoInputRef = useRef<HTMLInputElement | null>(null);
@@ -852,7 +869,38 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
                           {f.label}
                         </option>
                       ))}
+                      {deviceFonts.filter((n) => !DOCUMENT_FONT_OPTIONS.some((p) => p.id === n)).length > 0 && (
+                        <optgroup label="Installed on this device">
+                          {deviceFonts
+                            .filter((n) => !DOCUMENT_FONT_OPTIONS.some((p) => p.id === n))
+                            .map((n) => (
+                              <option key={n} value={n}>
+                                {n}
+                              </option>
+                            ))}
+                        </optgroup>
+                      )}
+                      {!DOCUMENT_FONT_OPTIONS.some((p) => p.id === theme.fontName) &&
+                        !deviceFonts.includes(theme.fontName) && (
+                          <option value={theme.fontName}>{theme.fontName}</option>
+                        )}
                     </select>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {canUseDeviceFonts ? (
+                        <button
+                          type="button"
+                          onClick={loadDeviceFonts}
+                          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50 cursor-pointer min-h-[36px]"
+                        >
+                          Use fonts installed on this device
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-slate-500">
+                          Device font list needs Chrome or Edge on Windows. Other devices use the presets above.
+                        </span>
+                      )}
+                      {fontNote && <span className="text-[11px] text-slate-600">{fontNote}</span>}
+                    </div>
                   </div>
 
                   {/* 6 Color Pickers (Includes Header Font Color & Document Font Color) */}

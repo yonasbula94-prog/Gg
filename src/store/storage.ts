@@ -4,7 +4,7 @@ import {
   COMPANY_INFO,
   DEFAULT_DASHBOARD_PREFS,
   DEFAULT_END_USER_ADDRESSES,
-  DOCUMENT_FONT_OPTIONS,
+  SAFE_FONT_NAME,
   END_USER_OPTIONS,
 } from '../constants/themes';
 import {
@@ -219,11 +219,8 @@ export function normalizeThemeCustomization(raw: unknown): ThemeCustomization {
     typeof val === 'string' && /^#[0-9A-Fa-f]{6}$/.test(val.trim())
       ? val.trim().toUpperCase()
       : undefined;
-  const validFontIds = new Set<DocumentFontId>(DOCUMENT_FONT_OPTIONS.map((f) => f.id));
   const fontFamily =
-    typeof src.fontFamily === 'string' && validFontIds.has(src.fontFamily as DocumentFontId)
-      ? (src.fontFamily as DocumentFontId)
-      : undefined;
+    typeof src.fontFamily === 'string' && SAFE_FONT_NAME.test(src.fontFamily) ? src.fontFamily : undefined;
 
   const out: ThemeCustomization = {};
   const p = validHex(src.primary);
