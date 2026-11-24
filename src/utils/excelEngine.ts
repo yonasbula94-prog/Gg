@@ -1278,7 +1278,7 @@ export async function exportJobTemplateXlsx(
 
   // Customer freight = (base + doc charge [+ loading for sea]) x (1 + freight markup E6). R41 feeds PROFORMA INVOICE!H39.
   const freightRows: [number, string, string][] = [
-    [38, 'Base Freight: AIR = MAX(CBM*Rate, KG*Rate); SEA = containers', 'IF($E$5="SEA",SUM($L$6:$L$8),MAX(K37*I3,M37*L3))'],
+    [38, '="Base freight · "&IF($E$5="SEA","SEA: container total","AIR: greater of CBM or KG charge")', 'IF($E$5="SEA",SUM($L$6:$L$8),MAX(K37*I3,M37*L3))'],
     [39, 'Documentation Charge (O3 %)', 'R38*O3'],
     [40, 'Freight + Doc + Loading (sea) Subtotal', 'R38+R39+IF($E$5="SEA",R38*$E$7,0)'],
     [41, 'Customer Freight (With Freight Markup E6)', 'ROUND(R40*(1+$E$6),2)'],
@@ -1286,7 +1286,8 @@ export async function exportJobTemplateXlsx(
   freightRows.forEach(([r, lbl, formula]) => {
     wsPC.getRow(r).height = 22;
     wsPC.mergeCells(r, 14, r, 17);
-    wsPC.getCell(r, 14).value = lbl;
+    // Row 38 names the freight method selected in E5 (AIR or SEA), not both
+    wsPC.getCell(r, 14).value = lbl.startsWith('=') ? { formula: lbl.slice(1) } : lbl;
     wsPC.getCell(r, 14).alignment = { horizontal: 'right', vertical: 'middle' };
     wsPC.getCell(r, 14).font = { name: fontName, size: 9, bold: r === 41 };
     wsPC.getCell(r, 18).value = { formula };
