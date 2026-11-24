@@ -30,6 +30,7 @@ export function useCellRange(config: CellRangeConfig) {
   const configRef = useRef(config);
   configRef.current = config;
   const memoryClip = useRef<string>('');
+  const clipboardWriteFailed = useRef(false);
 
   const bounds = (a: Pos | null, b: Pos | null) => {
     if (!a || !b) return null;
@@ -92,8 +93,10 @@ export function useCellRange(config: CellRangeConfig) {
     memoryClip.current = text;
     try {
       await navigator.clipboard.writeText(text);
+      clipboardWriteFailed.current = false;
     } catch {
-      // Clipboard blocked: the in-app copy still works for Ctrl+V inside this page
+      // Clipboard blocked: the in-app copy is used for paste, so unrelated clipboard text is never pasted
+      clipboardWriteFailed.current = true;
     }
     return cellCount;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -103,11 +106,13 @@ export function useCellRange(config: CellRangeConfig) {
     if (!box) return 0;
     const c = configRef.current;
     let text = memoryClip.current;
-    try {
-      const fromClipboard = await navigator.clipboard.readText();
-      if (fromClipboard) text = fromClipboard;
-    } catch {
-      // Clipboard read blocked: use the copy made on this page
+    if (!clipboardWriteFailed.current) {
+      try {
+        const fromClipboard = await navigator.clipboard.readText();
+        if (fromClipboard) text = fromClipboard;
+      } catch {
+        // Clipboard read blocked: use the copy made on this page
+      }
     }
     if (!text) return 0;
     const lines = text.replace(/\r/g, '').split('\n');
@@ -131,6 +136,10 @@ export function useCellRange(config: CellRangeConfig) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || cellCount < 2) return;
+      // Typing in a field outside the table keeps normal copy and paste
+      const target = e.target as HTMLElement | null;
+      const inTable = !!target?.closest?.('table[data-range-table]');
+      if (!inTable && target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
       const key = e.key.toLowerCase();
       if (key === 'c') {
         e.preventDefault();

@@ -13,8 +13,7 @@ interface PageDomain {
 const DOC_CONTROL_KEYS: (keyof JobControls)[] = [
   'endUserSelect', 'customEndUser', 'endUserContact', 'endUserAddress', 'rfqRef', 'customerPoRef',
   'paymentTerms', 'deliveryLeadTime', 'shipDate', 'portOfLoading', 'deliveryDate', 'transportRef',
-  'receivedBy', 'remarks', 'authorizedSignatory', 'counterpartySignatory', 'currency', 'incoterm',
-  'destination', 'vatRate', 'includeVat',
+  'receivedBy', 'remarks', 'authorizedSignatory', 'counterpartySignatory',
 ];
 
 const DOC_ITEM_KEYS: (keyof JobItemRow)[] = [
@@ -30,7 +29,7 @@ const DOMAINS: Record<string, PageDomain> = {
   INTERNAL_QUOTE: {
     items: ['requestedDescription', 'offeredDescription', 'uom', 'qty', 'customFields', 'supplierUnitCost'],
     jobKeys: ['supplierQuote'],
-    controlKeys: ['supplierName', 'supplierAddress', 'supplierRef', 'paymentTerms', 'deliveryLeadTime', 'currency', 'incoterm', 'destination'],
+    controlKeys: ['supplierName', 'supplierAddress', 'supplierRef', 'paymentTerms', 'deliveryLeadTime'],
   },
 };
 

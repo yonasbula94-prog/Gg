@@ -2749,10 +2749,6 @@ export async function exportSupplierRfqXlsx(
       ['DESTINATION', `${job.controls.incoterm} · ${job.controls.destination}`],
     ],
   });
-  if (rfq?.showEndUser && endUser) {
-    ws.getCell('B4').value = `End user: ${endUser}`;
-    ws.getCell('B4').font = { name: fontName, size: 9, italic: true, color: { argb: 'FF475569' } };
-  }
 
   const header = ws.getRow(11);
   header.height = 26;
@@ -2787,7 +2783,8 @@ export async function exportSupplierRfqXlsx(
   });
 
   let cursor = 12 + Math.max(items.length, 1) + 1;
-  const terms = `Please quote unit price and total in ${currency}, delivered ${job.controls.incoterm} ${job.controls.destination}, with lead time, validity and country of origin. Include certificates of analysis or safety data sheets where they apply.`;
+  const endUserLine = rfq?.showEndUser && endUser ? `\nEnd user: ${endUser}` : '';
+  const terms = `Please quote unit price and total in ${currency}, delivered ${job.controls.incoterm} ${job.controls.destination}, with lead time, validity and country of origin. Include certificates of analysis or safety data sheets where they apply.${endUserLine}`;
   ws.mergeCells(cursor, 2, cursor, lastCol);
   const termCell = ws.getCell(cursor, 2);
   termCell.value = terms;
