@@ -13,6 +13,7 @@ import { isJobLocked } from '../utils/amendments';
 import { useRowSelection } from '../hooks/useRowSelection';
 import { PasteIntoRows } from './PasteIntoRows';
 import { parseFlexibleNumber } from '../utils/supplierQuoteParser';
+import { useCellRange } from '../hooks/useCellRange';
 import {
   ConfirmDialogRequest,
   JobCalculationSummary,
@@ -101,6 +102,28 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
   const [bulkUom, setBulkUom] = useState('');
   // Every row can be selected, including empty rows
   const itemRowIds = job.items.map((it) => it.rowNumber);
+  // Free cell-range selection. Body cells: 2 requested, 3 offered, 4 UoM, 5 qty, 6 supplier cost
+  const iqFieldAt: Record<number, keyof JobItemRow> = {
+    2: 'requestedDescription',
+    3: 'offeredDescription',
+    4: 'uom',
+    5: 'qty',
+    6: 'supplierUnitCost',
+  };
+  const cellRange = useCellRange({
+    tableKey: 'internal-quote',
+    rowOrder: itemRowIds,
+    fieldAt: (ci) => (iqFieldAt[ci] ? (iqFieldAt[ci] as string) : null),
+    readCell: (rn, field) => {
+      const item = job.items.find((i) => i.rowNumber === rn);
+      const v = item ? (item as unknown as Record<string, unknown>)[field] : null;
+      return v === null || v === undefined ? '' : String(v);
+    },
+    writeCell: (rn, field, text) => {
+      const value = field === 'qty' || field === 'supplierUnitCost' ? parseFlexibleNumber(text) : text;
+      onUpdateItem(rn, { [field]: value } as Partial<JobItemRow>);
+    },
+  });
   const applyBulkItems = (patch: Partial<JobItemRow>) => rowSel.selected.forEach((rn) => onUpdateItem(rn, patch));
   return (
     <fieldset disabled={locked} className="space-y-6 min-w-0 border-0 p-0 m-0">
@@ -374,7 +397,7 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
         )}
 
         <div className="overflow-x-auto sheet-scroll">
-          <table className="w-full border-collapse text-xs">
+          <table className="w-full border-collapse text-xs" data-range-table="internal-quote">
             <thead>
               <tr style={{ backgroundColor: theme.primary, color: theme.primaryText }}>
                 <th className="py-2.5 px-2 text-center w-8">
@@ -408,6 +431,15 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
                     style={isAlt ? { backgroundColor: theme.zebraRow } : undefined}
                     className="hover:bg-slate-50/70"
                     onMouseEnter={() => rowSel.dragOver(item.rowNumber)}
+                    onMouseDown={(e) => {
+                      const td = (e.target as HTMLElement).closest('td');
+                      if (td) cellRange.onCellDown(item.rowNumber, td.cellIndex, e);
+                    }}
+                    onMouseOver={(e) => {
+                      const td = (e.target as HTMLElement).closest('td');
+                      if (td) cellRange.onCellOver(item.rowNumber, td.cellIndex);
+                    }}
+                    data-row-number={item.rowNumber}
                   >
                     <td
                       className="py-1.5 px-2 text-center select-none"
