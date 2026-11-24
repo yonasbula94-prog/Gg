@@ -560,10 +560,10 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                   <th className="py-2.5 px-2.5 text-center font-semibold border-r border-white/15 w-11">Row</th>
                   <th className="py-2.5 px-3 text-left font-semibold min-w-[150px]">Offered Description</th>
                   <th className="py-2.5 px-2 text-right font-semibold w-14">Qty</th>
-                  <th className="py-2.5 px-2 text-right font-semibold w-16">Boxes</th>
-                  <th className="py-2.5 px-1.5 text-right font-semibold w-16">L (cm)</th>
-                  <th className="py-2.5 px-1.5 text-right font-semibold w-16">W (cm)</th>
-                  <th className="py-2.5 px-1.5 text-right font-semibold w-16">H (cm)</th>
+                  <th className="py-2.5 px-2 text-right font-semibold min-w-[60px]">Boxes</th>
+                  <th className="py-2.5 px-1.5 text-right font-semibold min-w-[60px]">L (cm)</th>
+                  <th className="py-2.5 px-1.5 text-right font-semibold min-w-[60px]">W (cm)</th>
+                  <th className="py-2.5 px-1.5 text-right font-semibold min-w-[60px]">H (cm)</th>
                   <th className="py-2.5 px-2 text-right font-semibold w-16">CBM</th>
                   <th className="py-2.5 px-2 text-right font-semibold w-16">Kg/Box</th>
                   <th className="py-2.5 px-2 text-right font-semibold w-16">Gross KG</th>
@@ -619,7 +619,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                           onChange={(e) =>
                             guardItem(row.rowNumber, { boxes: parseOptionalNumber(e.target.value) })
                           }
-                          className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-1.5 py-1 text-right text-blue-700 focus:outline-none"
+                          className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white min-w-[52px] px-1.5 py-1 text-right text-blue-700 focus:outline-none"
                         />
                       </td>
                       <td className="p-1">
@@ -632,7 +632,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                           onChange={(e) =>
                             guardItem(row.rowNumber, { boxLengthCm: parseOptionalNumber(e.target.value) })
                           }
-                          className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-1.5 py-1 text-right text-blue-700 focus:outline-none"
+                          className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white min-w-[52px] px-1.5 py-1 text-right text-blue-700 focus:outline-none"
                         />
                       </td>
                       <td className="p-1">
@@ -645,7 +645,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                           onChange={(e) =>
                             guardItem(row.rowNumber, { boxWidthCm: parseOptionalNumber(e.target.value) })
                           }
-                          className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-1.5 py-1 text-right text-blue-700 focus:outline-none"
+                          className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white min-w-[52px] px-1.5 py-1 text-right text-blue-700 focus:outline-none"
                         />
                       </td>
                       <td className="p-1">
@@ -658,7 +658,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                           onChange={(e) =>
                             guardItem(row.rowNumber, { boxHeightCm: parseOptionalNumber(e.target.value) })
                           }
-                          className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-1.5 py-1 text-right text-blue-700 focus:outline-none"
+                          className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white min-w-[52px] px-1.5 py-1 text-right text-blue-700 focus:outline-none"
                         />
                       </td>
                       <td className="py-1.5 px-2 text-right text-slate-700">
@@ -674,7 +674,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                           onChange={(e) =>
                             guardItem(row.rowNumber, { kgPerBox: parseOptionalNumber(e.target.value) })
                           }
-                          className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-1.5 py-1 text-right text-blue-700 focus:outline-none"
+                          className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white min-w-[52px] px-1.5 py-1 text-right text-blue-700 focus:outline-none"
                         />
                       </td>
                       <td className="py-1.5 px-2 text-right text-slate-700">

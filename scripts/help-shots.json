@@ -1,0 +1,343 @@
+[
+  {
+    "file": "overview.jpg",
+    "caption": "The sidebar in workflow order.",
+    "page": "TRACKER",
+    "callouts": [
+      {
+        "n": 1,
+        "find": "Internal Quote",
+        "label": "Supplier offer"
+      },
+      {
+        "n": 2,
+        "find": "Price Calc (Internal)",
+        "label": "Markup & freight"
+      },
+      {
+        "n": 3,
+        "find": "Quotation (Master)",
+        "label": "End user & controls"
+      },
+      {
+        "n": 4,
+        "find": "Proforma Invoice",
+        "label": "Issue PI"
+      },
+      {
+        "n": 5,
+        "find": "Packing List",
+        "label": "Packages"
+      },
+      {
+        "n": 6,
+        "find": "Delivery Note",
+        "label": "Completes job"
+      }
+    ]
+  },
+  {
+    "file": "internal-quote.jpg",
+    "caption": "Internal Quote: supplier details and the item table.",
+    "page": "INTERNAL_QUOTE",
+    "callouts": [
+      {
+        "n": 1,
+        "find": "Import Supplier Quote",
+        "label": "Load quote"
+      },
+      {
+        "n": 2,
+        "find": "Supplier Company Name",
+        "label": "Supplier name"
+      },
+      {
+        "n": 3,
+        "find": "Supplier Currency",
+        "label": "Currency"
+      },
+      {
+        "n": 4,
+        "find": "Supplier Payment Terms",
+        "label": "Payment terms"
+      },
+      {
+        "n": 5,
+        "find": "Supplier Unit Cost",
+        "label": "Unit cost"
+      },
+      {
+        "n": 6,
+        "find": "Select all rows",
+        "label": "Select rows"
+      }
+    ]
+  },
+  {
+    "file": "import-start.jpg",
+    "caption": "Step 1: the upload button is in the top bar.",
+    "page": "FILES",
+    "callouts": [
+      {
+        "n": 1,
+        "find": "Open .xlsx / .pdf",
+        "label": "Upload quote"
+      }
+    ]
+  },
+  {
+    "file": "import-review.jpg",
+    "caption": "Steps 2 to 5: review, map, paste and load.",
+    "page": "INTERNAL_QUOTE",
+    "open": "importReview",
+    "callouts": [
+      {
+        "n": 2,
+        "find": "Review Items",
+        "label": "Check lines"
+      },
+      {
+        "n": 3,
+        "find": "Column Mapper Assistant",
+        "label": "Fix columns"
+      },
+      {
+        "n": 4,
+        "find": "Paste / Split Text",
+        "label": "Paste text"
+      },
+      {
+        "n": 5,
+        "find": "Load into",
+        "label": "Load job"
+      }
+    ]
+  },
+  {
+    "file": "price-calc.jpg",
+    "caption": "Price Calc: markup, VAT and freight.",
+    "page": "PRICE_CALC",
+    "zoom": 0.72,
+    "height": 1250,
+    "callouts": [
+      {
+        "n": 1,
+        "find": "20%",
+        "label": "Markup"
+      },
+      {
+        "n": 2,
+        "find": "Include VAT",
+        "label": "VAT"
+      },
+      {
+        "n": 3,
+        "find": "Sea freight (containers)",
+        "label": "Freight mode"
+      },
+      {
+        "n": 4,
+        "find": "Rate / CBM",
+        "label": "Air rates"
+      },
+      {
+        "n": 5,
+        "find": "Documentation charge %",
+        "label": "Doc & loading %"
+      },
+      {
+        "n": 6,
+        "find": "Freight markup %",
+        "label": "Freight markup"
+      },
+      {
+        "n": 7,
+        "find": "L (cm)",
+        "label": "Box size"
+      }
+    ]
+  },
+  {
+    "file": "quotation.jpg",
+    "caption": "Quotation (Master): job controls, preview and issue.",
+    "page": "QT",
+    "callouts": [
+      {
+        "n": 1,
+        "find": "RFQ / Tender Ref.",
+        "label": "Reference"
+      },
+      {
+        "n": 2,
+        "find": "A4 Print & Excel Preview",
+        "label": "Check figures"
+      },
+      {
+        "n": 3,
+        "find": "Issue Quotation",
+        "label": "Issue"
+      }
+    ]
+  },
+  {
+    "file": "packing-list.jpg",
+    "caption": "Packing List: packages, cartons and weights.",
+    "page": "PL",
+    "callouts": [
+      {
+        "n": 4,
+        "find": "Packages (boxes",
+        "label": "Packages"
+      },
+      {
+        "n": 4,
+        "find": "Carton No.",
+        "label": "Carton no."
+      },
+      {
+        "n": 5,
+        "find": "Issue Packing List",
+        "label": "Issue"
+      }
+    ]
+  },
+  {
+    "file": "unlock.jpg",
+    "caption": "Steps 1 and 2: unlock with the admin password.",
+    "page": "QT",
+    "issued": true,
+    "open": "unlockDialog",
+    "callouts": [
+      {
+        "n": 2,
+        "find": "Admin password",
+        "label": "Admin password"
+      }
+    ]
+  },
+  {
+    "file": "amend.jpg",
+    "caption": "Steps 4 and 5: save a revision or discard.",
+    "page": "QT",
+    "issued": true,
+    "open": "amendMode",
+    "callouts": [
+      {
+        "n": 4,
+        "find": "Save as Rev",
+        "label": "Save revision"
+      },
+      {
+        "n": 5,
+        "find": "Discard changes",
+        "label": "Discard"
+      }
+    ]
+  },
+  {
+    "file": "registry.jpg",
+    "caption": "Master Registry: sync, selection and the change log.",
+    "page": "REGISTRY",
+    "callouts": [
+      {
+        "n": 3,
+        "find": "Select all records",
+        "label": "Select records"
+      },
+      {
+        "n": 4,
+        "find": "Change log (.csv)",
+        "label": "Change log"
+      },
+      {
+        "n": 5,
+        "find": "Sync Master_Registry.xlsx",
+        "label": "Sync"
+      }
+    ]
+  },
+  {
+    "file": "import-export.jpg",
+    "caption": "Import & Export: exports and backups.",
+    "page": "FILES",
+    "callouts": [
+      {
+        "n": 2,
+        "find": "Download .xlsx",
+        "label": "Workbook"
+      },
+      {
+        "n": 3,
+        "find": "Export Registry .xlsx",
+        "label": "Registry"
+      },
+      {
+        "n": 4,
+        "find": "Backup JSON",
+        "label": "Backup"
+      },
+      {
+        "n": 5,
+        "find": "Restore JSON",
+        "label": "Restore"
+      }
+    ]
+  },
+  {
+    "file": "dashboard-reports.jpg",
+    "caption": "Dashboard: the full PDF and Excel reports.",
+    "page": "TRACKER",
+    "callouts": [
+      {
+        "n": 4,
+        "find": "PDF Report",
+        "label": "PDF report"
+      },
+      {
+        "n": 5,
+        "find": "Excel Report",
+        "label": "Excel report"
+      }
+    ]
+  },
+  {
+    "file": "dashboard.jpg",
+    "caption": "Dashboard: select jobs, then export only those.",
+    "page": "TRACKER",
+    "open": "selectAllJobs",
+    "callouts": [
+      {
+        "n": 2,
+        "find": "Select all jobs",
+        "label": "Select jobs"
+      },
+      {
+        "n": 3,
+        "find": "Export selected (.xlsx)",
+        "label": "Export selected"
+      }
+    ]
+  },
+  {
+    "file": "settings.jpg",
+    "caption": "Clients & Settings: end users and admin unlock.",
+    "page": "STUDIO",
+    "callouts": [
+      {
+        "n": 1,
+        "find": "End-User Name",
+        "label": "End-user name"
+      },
+      {
+        "n": 1,
+        "find": "Add End User",
+        "label": "Add"
+      },
+      {
+        "n": 2,
+        "find": "Unlock Admin Settings",
+        "label": "Unlock"
+      }
+    ]
+  }
+]

@@ -29,7 +29,6 @@ export const HelpView: React.FC<HelpViewProps> = ({ initialTopicId, returnLabel,
 
   const topics = useMemo(() => searchHelpTopics(query), [query]);
   const topic: HelpTopic = HELP_TOPICS.find((t) => t.id === selectedId) ?? HELP_TOPICS[0];
-  const image = shotUrl(topic.screenshot);
 
   return (
     <div className="space-y-4">
@@ -88,14 +87,18 @@ export const HelpView: React.FC<HelpViewProps> = ({ initialTopicId, returnLabel,
             <p className="text-xs text-slate-600">{topic.summary}</p>
           </header>
 
-          {image && (
-            <figure className="space-y-2">
-              <button type="button" onClick={() => setZoom(image)} className="block w-full cursor-zoom-in" aria-label="Enlarge screenshot">
-                <img src={image} alt={topic.screenshotCaption ?? topic.title} className="w-full rounded-md border border-slate-200" />
-              </button>
-              {topic.screenshotCaption && <figcaption className="text-[11px] text-slate-500">{topic.screenshotCaption} (tap to enlarge)</figcaption>}
-            </figure>
-          )}
+          {topic.shots.map((shot) => {
+            const src = shotUrl(shot.file);
+            if (!src) return null;
+            return (
+              <figure key={shot.file} className="space-y-2">
+                <button type="button" onClick={() => setZoom(src)} className="block w-full cursor-zoom-in" aria-label="Enlarge screenshot">
+                  <img src={src} alt={shot.caption} className="w-full rounded-md border border-slate-200" />
+                </button>
+                <figcaption className="text-[11px] text-slate-500">{shot.caption} (tap to enlarge)</figcaption>
+              </figure>
+            );
+          })}
 
           <section className="space-y-2">
             <h3 className="text-sm font-semibold text-slate-900">Step by step</h3>
