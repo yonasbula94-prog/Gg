@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import { DOC_META, EXCEL_THEMES } from './constants/themes';
+import { ConfirmDialog } from './components/ConfirmDialog';
 import { DocumentWorkspaceView } from './components/DocumentWorkspaceView';
 import { ExcelStudioView } from './components/ExcelStudioView';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButton';
@@ -31,10 +32,13 @@ import {
   getNextSequenceNumber,
   loadActiveJobId,
   loadCompanyProfile,
-  loadJobs,
-  loadRegistry,
+  loadJobsWithHealth,
+  loadRegistryWithHealth,
   loadThemeVariant,
+  normalizeCompanyProfile,
   normalizeJob,
+  normalizeRegistryEntries,
+  safeDeepClone,
   saveActiveJobId,
   saveCompanyProfile,
   saveJobs,
@@ -43,6 +47,7 @@ import {
 } from './store/storage';
 import {
   CompanyProfile,
+  ConfirmDialogRequest,
   CustomColumnDef,
   DocPrefix,
   FreightConfig,
@@ -72,15 +77,33 @@ const TAB_LABELS: Record<WorkspaceTab, string> = {
 };
 
 export default function App() {
-  const [jobs, setJobs] = useState<ProcurementJob[]>(() => loadJobs());
-  const [activeJobId, setActiveJobId] = useState<string>(() => loadActiveJobId(loadJobs()));
-  const [registry, setRegistry] = useState<RegistryEntry[]>(() => loadRegistry());
+  // Single-pass startup load so jobs, activeJobId, and health recovery never diverge
+  const [startup] = useState(() => {
+    const jobsHealth = loadJobsWithHealth();
+    const regHealth = loadRegistryWithHealth();
+    const activeId = loadActiveJobId(jobsHealth.jobs);
+    return {
+      jobs: jobsHealth.jobs,
+      registry: regHealth.entries,
+      activeId,
+      recovered: jobsHealth.recovered || regHealth.recovered,
+    };
+  });
+
+  const [jobs, setJobs] = useState<ProcurementJob[]>(startup.jobs);
+  const [activeJobId, setActiveJobId] = useState<string>(startup.activeId);
+  const [registry, setRegistry] = useState<RegistryEntry[]>(startup.registry);
   const [themeId, setThemeId] = useState<ThemeVariantId>(() => loadThemeVariant());
   const [company, setCompany] = useState<CompanyProfile>(() => loadCompanyProfile());
   const [platformMode, setPlatformMode] = useState<PlatformMode>(() => detectDefaultPlatform());
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('PI');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(
+    startup.recovered
+      ? 'Recovered damaged local storage automatically. Your workspace is safe to use.'
+      : null
+  );
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogRequest | null>(null);
   const [pendingSupplierQuote, setPendingSupplierQuote] = useState<ParsedSupplierQuote | null>(null);
   const quickImportRef = useRef<HTMLInputElement | null>(null);
 
@@ -93,22 +116,38 @@ export default function App() {
   const nextSeq = useMemo(() => getNextSequenceNumber(registry), [registry]);
   const theme = EXCEL_THEMES[themeId];
 
-  useEffect(() => saveJobs(jobs), [jobs]);
-  useEffect(() => saveRegistry(registry), [registry]);
-  useEffect(() => saveThemeVariant(themeId), [themeId]);
-  useEffect(() => saveCompanyProfile(company), [company]);
-  useEffect(() => savePlatformMode(platformMode), [platformMode]);
-  useEffect(() => {
-    if (activeJob?.id) saveActiveJobId(activeJob.id);
-  }, [activeJob?.id]);
-
   const showToast = (msg: string) => {
     setToast(msg);
   };
 
   useEffect(() => {
+    if (!saveJobs(jobs)) {
+      setToast('Local storage is nearly full. Export a JSON Backup in Excel Studio to safeguard your jobs.');
+    }
+  }, [jobs]);
+
+  useEffect(() => {
+    if (!saveRegistry(registry)) {
+      setToast('Local storage is nearly full. Export Master_Registry.xlsx or JSON Backup to protect records.');
+    }
+  }, [registry]);
+
+  useEffect(() => saveThemeVariant(themeId), [themeId]);
+
+  useEffect(() => {
+    if (!saveCompanyProfile(company)) {
+      setToast('Could not save company settings (logo image may be too large for browser storage).');
+    }
+  }, [company]);
+
+  useEffect(() => savePlatformMode(platformMode), [platformMode]);
+  useEffect(() => {
+    if (activeJob?.id) saveActiveJobId(activeJob.id);
+  }, [activeJob?.id]);
+
+  useEffect(() => {
     if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 4000);
+    const timer = setTimeout(() => setToast(null), 4200);
     return () => clearTimeout(timer);
   }, [toast]);
 
@@ -168,7 +207,7 @@ export default function App() {
 
   const handleDuplicateAsNewJob = () => {
     const copy: ProcurementJob = {
-      ...structuredClone(activeJob),
+      ...safeDeepClone(activeJob),
       id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       jobName: `${activeJob.jobName} (Revision)`,
       createdAt: new Date().toISOString(),
@@ -183,10 +222,27 @@ export default function App() {
 
   const handleDeleteCurrentJob = () => {
     if (jobs.length <= 1) return;
-    const remaining = jobs.filter((j) => j.id !== activeJob.id);
-    setJobs(remaining);
-    setActiveJobId(remaining[0].id);
-    showToast(`Removed job "${activeJob.jobName}" from local workspace.`);
+    const target = activeJob;
+    setConfirmDialog({
+      title: `Delete "${target.jobName}"?`,
+      message:
+        'This permanently removes the job from your local workspace. Claimed document numbers remain recorded in the Master Registry.',
+      confirmLabel: 'Delete Job',
+      destructive: true,
+      onConfirm: () => {
+        setJobs((prev) => {
+          const remaining = prev.filter((j) => j.id !== target.id);
+          if (remaining.length === 0) {
+            const fresh = createBlankJob('Procurement Job #1');
+            setActiveJobId(fresh.id);
+            return [fresh];
+          }
+          setActiveJobId(remaining[0].id);
+          return remaining;
+        });
+        showToast(`Removed job "${target.jobName}" from local workspace.`);
+      },
+    });
   };
 
   const handleIssueDocument = (prefix: DocPrefix) => {
@@ -374,7 +430,7 @@ export default function App() {
         return;
       }
 
-      const res = await importWorkbookFromXlsx(file);
+      const res = await importWorkbookFromXlsx(file, company.endUsers);
       if (res.kind === 'registry') {
         handleSyncRegistry(res.entries);
         setActiveTab('REGISTRY');
@@ -407,15 +463,16 @@ export default function App() {
     restoredCompany?: CompanyProfile
   ) => {
     if (restoredJobs.length > 0) {
-      const normalized = restoredJobs.map(normalizeJob);
+      const normalized = restoredJobs.map((j) => normalizeJob(j));
       setJobs(normalized);
       setActiveJobId(normalized[0].id);
     }
-    if (restoredRegistry.length > 0) {
-      setRegistry(restoredRegistry);
+    const cleanReg = normalizeRegistryEntries(restoredRegistry);
+    if (cleanReg.length > 0) {
+      setRegistry(cleanReg);
     }
     if (restoredCompany) {
-      setCompany((prev) => ({ ...prev, ...restoredCompany }));
+      setCompany(normalizeCompanyProfile(restoredCompany));
     }
   };
 
@@ -766,6 +823,7 @@ export default function App() {
               onUpdateItem={handleUpdateItem}
               onIssueDocument={handleIssueDocument}
               onDuplicateAsNewJob={handleDuplicateAsNewJob}
+              onRequestConfirm={setConfirmDialog}
               onNotify={showToast}
             />
           )}
@@ -778,6 +836,8 @@ export default function App() {
               platformMode={platformMode}
               onUpdateItem={handleUpdateItem}
               onUpdateFreight={handleUpdateFreight}
+              onUpdateControls={handleUpdateControls}
+              onRequestConfirm={setConfirmDialog}
             />
           )}
 
@@ -807,11 +867,19 @@ export default function App() {
               onOpenSupplierQuote={setPendingSupplierQuote}
               onSyncRegistry={handleSyncRegistry}
               onRestoreBackup={handleRestoreBackup}
+              onRequestConfirm={setConfirmDialog}
               onNotify={showToast}
             />
           )}
         </main>
       </div>
+
+      {/* Reusable In-App Confirmation Dialog for Destructive Actions */}
+      <ConfirmDialog
+        request={confirmDialog}
+        themeId={themeId}
+        onClose={() => setConfirmDialog(null)}
+      />
 
       {/* Supplier Quote (.pdf / any .xlsx / Pasted Text) Review & Load Modal */}
       {pendingSupplierQuote && (

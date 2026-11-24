@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -20,6 +20,7 @@ import {
 } from '../constants/themes';
 import {
   CompanyProfile,
+  ConfirmDialogRequest,
   CustomColumnDef,
   CustomColumnPosition,
   DocPrefix,
@@ -34,7 +35,6 @@ import {
 import {
   formatMoney,
   formatNumber,
-  formatPct,
   getResolvedEndUser,
   validateForIssue,
 } from '../utils/calculations';
@@ -55,6 +55,7 @@ interface DocumentWorkspaceViewProps {
   onUpdateItem: (rowNumber: number, patch: Partial<JobItemRow>) => void;
   onIssueDocument: (prefix: DocPrefix) => void;
   onDuplicateAsNewJob: () => void;
+  onRequestConfirm: (req: ConfirmDialogRequest) => void;
   onNotify: (msg: string) => void;
 }
 
@@ -77,7 +78,8 @@ const CUSTOM_COLUMN_POSITIONS: { value: CustomColumnPosition; label: string }[] 
 function parseOptionalNumber(val: string): number | null {
   if (val.trim() === '') return null;
   const n = Number(val);
-  return Number.isNaN(n) ? null : n;
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
 }
 
 export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
@@ -94,6 +96,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
   onUpdateItem,
   onIssueDocument,
   onDuplicateAsNewJob,
+  onRequestConfirm,
   onNotify,
 }) => {
   const [subView, setSubView] = useState<'edit' | 'preview'>(prefix === 'PI' ? 'edit' : 'preview');
@@ -101,6 +104,15 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
   const [exporting, setExporting] = useState(false);
   const [newColLabel, setNewColLabel] = useState('');
   const [newColPosition, setNewColPosition] = useState<CustomColumnPosition>('after_no');
+  const printTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (printTimerRef.current !== null) {
+        window.clearTimeout(printTimerRef.current);
+      }
+    };
+  }, []);
 
   const customColumns = job.customColumns || [];
   const colsAt = (pos: CustomColumnPosition) =>
@@ -133,7 +145,27 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
 
   const handleRemoveCustomColumn = (id: string) => {
     if (isLocked) return;
-    onUpdateCustomColumns(customColumns.filter((c) => c.id !== id));
+    const col = customColumns.find((c) => c.id === id);
+    if (!col) return;
+    const populatedCount = job.items.filter(
+      (it) => it.customFields?.[id] && it.customFields[id].trim() !== ''
+    ).length;
+
+    const removeNow = () => {
+      onUpdateCustomColumns(customColumns.filter((c) => c.id !== id));
+    };
+
+    if (populatedCount > 0) {
+      onRequestConfirm({
+        title: `Remove "${col.label}" Column?`,
+        message: `${populatedCount} line item${populatedCount === 1 ? '' : 's'} currently have values entered under "${col.label}". Removing this column hides it from all 6 documents and Excel exports.`,
+        confirmLabel: 'Remove Column',
+        destructive: true,
+        onConfirm: removeNow,
+      });
+    } else {
+      removeNow();
+    }
   };
 
   const theme = EXCEL_THEMES[themeId];
@@ -169,9 +201,18 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
   };
 
   const handlePrint = () => {
+    if (printTimerRef.current !== null) {
+      window.clearTimeout(printTimerRef.current);
+      printTimerRef.current = null;
+    }
     if (subView !== 'preview') {
       setSubView('preview');
-      setTimeout(() => window.print(), 120);
+      requestAnimationFrame(() => {
+        printTimerRef.current = window.setTimeout(() => {
+          printTimerRef.current = null;
+          window.print();
+        }, 120);
+      });
     } else {
       window.print();
     }
@@ -567,64 +608,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
 
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    VAT Rate (PI!L5 · Preset or Any %)
-                  </label>
-                  <div className="flex items-center gap-1.5">
-                    <div className="inline-flex rounded-lg bg-slate-100 p-0.5 shrink-0">
-                      {[
-                        { label: '5%', value: 0.05 },
-                        { label: '0%', value: 0 },
-                      ].map((opt) => {
-                        const active = Math.abs(job.controls.vatRate - opt.value) < 0.0001;
-                        return (
-                          <button
-                            key={opt.label}
-                            type="button"
-                            disabled={isLocked}
-                            onClick={() => onUpdateControls({ vatRate: opt.value })}
-                            className={`px-2.5 min-h-[38px] rounded-md text-xs font-mono-tabular font-semibold transition-colors cursor-pointer disabled:opacity-50 ${
-                              active
-                                ? 'bg-slate-900 text-white'
-                                : 'text-slate-600 hover:text-slate-900'
-                            }`}
-                          >
-                            {opt.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <div className="relative flex-1 min-w-[78px]">
-                      <input
-                        type="number"
-                        inputMode="decimal"
-                        step="0.5"
-                        min="0"
-                        max="100"
-                        disabled={isLocked}
-                        value={Number((job.controls.vatRate * 100).toFixed(2))}
-                        onChange={(e) => {
-                          if (e.target.value === '') {
-                            onUpdateControls({ vatRate: 0 });
-                            return;
-                          }
-                          const pct = Number(e.target.value);
-                          if (!Number.isNaN(pct) && pct >= 0 && pct <= 100) {
-                            onUpdateControls({ vatRate: Math.round(pct * 100) / 10000 });
-                          }
-                        }}
-                        aria-label="Custom VAT percentage"
-                        className="w-full min-h-[42px] rounded-lg border border-slate-200 bg-white pl-2.5 pr-6 py-2 text-sm font-mono-tabular text-right text-blue-700 font-semibold focus:border-slate-900 focus:outline-none disabled:bg-slate-50"
-                      />
-                      <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-mono-tabular text-slate-500">
-                        %
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                    Destination (K6:L6)
+                    Destination (K5:L5)
                   </label>
                   <input
                     type="text"
@@ -695,21 +679,32 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                 <span className="text-xs font-semibold text-slate-800">
                   Job Remarks &amp; Signature Lines (Editable per job — clear any field to leave blank)
                 </span>
-                {!isLocked && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onUpdateControls({
-                        remarks: '',
-                        authorizedSignatory: '',
-                        counterpartySignatory: '',
-                      })
-                    }
-                    className="text-[11px] font-medium text-slate-500 hover:text-red-600 cursor-pointer"
-                  >
-                    Clear Remarks &amp; Signatures
-                  </button>
-                )}
+                {!isLocked &&
+                  (job.controls.remarks.trim() ||
+                    (job.controls.authorizedSignatory ?? '').trim() ||
+                    (job.controls.counterpartySignatory ?? '').trim()) && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onRequestConfirm({
+                          title: 'Clear Remarks & Signatures?',
+                          message:
+                            'This will clear the job remarks and both signature labels across all documents for this job.',
+                          confirmLabel: 'Clear Fields',
+                          destructive: true,
+                          onConfirm: () =>
+                            onUpdateControls({
+                              remarks: '',
+                              authorizedSignatory: '',
+                              counterpartySignatory: '',
+                            }),
+                        })
+                      }
+                      className="text-[11px] font-medium text-slate-500 hover:text-red-600 cursor-pointer"
+                    >
+                      Clear Remarks &amp; Signatures
+                    </button>
+                  )}
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -885,6 +880,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                 themeId={themeId}
                 disabled={isLocked}
                 onUpdateItem={onUpdateItem}
+                onRequestConfirm={onRequestConfirm}
               />
             </div>
           ) : (
@@ -1444,12 +1440,6 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                     <div className="flex justify-between py-2 border-b border-slate-200">
                       <span className="font-sans text-slate-600">GOODS SUBTOTAL</span>
                       <span className="font-medium text-slate-900">{formatMoney(calc.goodsSubtotal, curr)}</span>
-                    </div>
-                    <div className="flex justify-between py-2 border-b border-slate-200">
-                      <span className="font-sans text-slate-600">
-                        VAT ({formatPct(job.controls.vatRate)} on Goods Only)
-                      </span>
-                      <span className="font-medium text-slate-900">{formatMoney(calc.vatAmount, curr)}</span>
                     </div>
                     <div className="flex justify-between py-2 border-b border-slate-200">
                       <span className="font-sans text-slate-600">

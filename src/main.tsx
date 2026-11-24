@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
+import { AppErrorBoundary } from './components/AppErrorBoundary.tsx';
 import './index.css';
 
 // Register offline Service Worker only in top-level http/https windows (skip in iframes and file://)
@@ -16,4 +17,8 @@ try {
   // Ignore SW registration errors when cookies/storage are restricted
 }
 
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(
+  <AppErrorBoundary>
+    <App />
+  </AppErrorBoundary>
+);

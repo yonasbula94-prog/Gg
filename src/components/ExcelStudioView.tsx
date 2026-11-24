@@ -1,11 +1,9 @@
 import React, { useRef, useState } from 'react';
 import {
-  BookOpen,
   Check,
   ClipboardPaste,
   Download,
   FileSpreadsheet,
-  FileText,
   FolderOpen,
   HardDriveDownload,
   Image as ImageIcon,
@@ -15,11 +13,11 @@ import {
   Tablet,
   Trash2,
   Upload,
-  Video,
 } from 'lucide-react';
 import { EXCEL_THEMES } from '../constants/themes';
 import {
   CompanyProfile,
+  ConfirmDialogRequest,
   ProcurementJob,
   RegistryEntry,
   ThemeVariantId,
@@ -29,7 +27,8 @@ import {
   exportMasterRegistryXlsx,
   importWorkbookFromXlsx,
 } from '../utils/excelEngine';
-import { downloadOfflinePackage, downloadTutorialAsset } from '../utils/offlineDownload';
+import { downloadOfflinePackage } from '../utils/offlineDownload';
+import { shareOrDownloadBlob } from '../utils/platform';
 import { ParsedSupplierQuote, parseSupplierPdfFile } from '../utils/supplierQuoteParser';
 
 interface ExcelStudioViewProps {
@@ -49,6 +48,7 @@ interface ExcelStudioViewProps {
     registry: RegistryEntry[],
     company?: CompanyProfile
   ) => void;
+  onRequestConfirm: (req: ConfirmDialogRequest) => void;
   onNotify: (msg: string) => void;
 }
 
@@ -65,6 +65,7 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
   onOpenSupplierQuote,
   onSyncRegistry,
   onRestoreBackup,
+  onRequestConfirm,
   onNotify,
 }) => {
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -109,7 +110,7 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
         return;
       }
 
-      const res = await importWorkbookFromXlsx(file);
+      const res = await importWorkbookFromXlsx(file, company.endUsers);
       if (res.kind === 'registry') {
         onSyncRegistry(res.entries);
         onNotify(`Synced ${res.importedCount} Master Registry records from ${file.name}`);
@@ -164,24 +165,25 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
     onUpdateCompany({ endUsers: company.endUsers.filter((u) => u !== name) });
   };
 
-  const handleExportJsonBackup = () => {
-    const payload = {
-      exportedAt: new Date().toISOString(),
-      version: 2,
-      company,
-      jobs: allJobs,
-      registry,
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `GG_Procurement_Offline_Backup_${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    onNotify('Downloaded offline JSON backup (includes jobs, registry, logo & company settings).');
+  const handleExportJsonBackup = async () => {
+    setBusyAction('backup');
+    try {
+      const payload = {
+        exportedAt: new Date().toISOString(),
+        version: 3,
+        company,
+        jobs: allJobs,
+        registry,
+      };
+      const filename = `GG_Procurement_Offline_Backup_${new Date().toISOString().slice(0, 10)}.json`;
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      await shareOrDownloadBlob(blob, filename, 'application/json');
+      onNotify('Exported offline JSON backup (includes jobs, registry, logo & company settings).');
+    } catch {
+      onNotify('Failed to export JSON backup.');
+    } finally {
+      setBusyAction(null);
+    }
   };
 
   const handleImportJsonBackup = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -191,8 +193,21 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
       const text = await file.text();
       const parsed = JSON.parse(text);
       if (Array.isArray(parsed.jobs) && Array.isArray(parsed.registry)) {
-        onRestoreBackup(parsed.jobs, parsed.registry, parsed.company);
-        onNotify(`Restored ${parsed.jobs.length} jobs and ${parsed.registry.length} registry entries.`);
+        const incomingJobs = parsed.jobs as ProcurementJob[];
+        const incomingRegistry = parsed.registry as RegistryEntry[];
+        const incomingCompany = parsed.company as CompanyProfile | undefined;
+        onRequestConfirm({
+          title: 'Restore Workspace From Backup?',
+          message: `This will replace your current ${allJobs.length} job${allJobs.length === 1 ? '' : 's'} and ${registry.length} registry record${registry.length === 1 ? '' : 's'} with ${incomingJobs.length} job${incomingJobs.length === 1 ? '' : 's'} and ${incomingRegistry.length} registry record${incomingRegistry.length === 1 ? '' : 's'} from "${file.name}".`,
+          confirmLabel: 'Restore Backup',
+          destructive: true,
+          onConfirm: () => {
+            onRestoreBackup(incomingJobs, incomingRegistry, incomingCompany);
+            onNotify(
+              `Restored ${incomingJobs.length} jobs and ${incomingRegistry.length} registry entries.`
+            );
+          },
+        });
       } else {
         onNotify('Invalid backup JSON structure.');
       }
@@ -486,10 +501,10 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
                 <div className="py-3.5 flex items-center justify-between gap-4">
                   <div>
                     <div className="text-sm font-medium text-slate-900">
-                      Windows PC Offline Version (.html)
+                      Windows PC Offline Package (.zip)
                     </div>
                     <div className="text-xs text-slate-500">
-                      Desktop spreadsheet grid—double-click directly on Windows (Chrome/Edge), zero internet needed
+                      Unzip to launch the standalone offline .html app directly on Windows (zero internet needed) — includes separate Tutorial/ guide &amp; demo video attachments.
                     </div>
                   </div>
                   <button
@@ -499,9 +514,9 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
                       setBusyAction('offline-win');
                       try {
                         const fn = await downloadOfflinePackage('windows');
-                        onNotify(`Downloaded ${fn} — double-click on Windows to launch offline.`);
+                        onNotify(`Downloaded ${fn} — unzip to run the standalone Windows app (Tutorial/ folder attached inside).`);
                       } catch {
-                        onNotify('Could not download Windows offline file.');
+                        onNotify('Could not download Windows offline package.');
                       } finally {
                         setBusyAction(null);
                       }
@@ -509,7 +524,7 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
                     className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 cursor-pointer min-h-[40px] whitespace-nowrap shrink-0 disabled:opacity-50"
                   >
                     <Monitor className="w-3.5 h-3.5" />
-                    <span>{busyAction === 'offline-win' ? 'Preparing...' : 'Windows .html'}</span>
+                    <span>{busyAction === 'offline-win' ? 'Preparing...' : 'Windows (.zip)'}</span>
                   </button>
                 </div>
 
@@ -520,7 +535,7 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
                         iPad / iOS Offline App Package (.zip)
                       </div>
                       <div className="text-xs text-slate-500">
-                        Includes touch app, offline cache (sw.js), and Grand Group Home Screen icon. Unzip → drag the folder onto app.netlify.com/drop → open that link in iPad Safari → Share → Add to Home Screen.
+                        Includes touch app, offline cache (sw.js), Grand Group Home Screen icon, and separate Tutorial/ attachments. Unzip → drag the app folder onto app.netlify.com/drop → open in iPad Safari → Add to Home Screen.
                       </div>
                     </div>
                     <button
@@ -530,7 +545,7 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
                         setBusyAction('offline-ipad');
                         try {
                           const fn = await downloadOfflinePackage('ipad');
-                          onNotify(`Downloaded ${fn}. Unzip and drag the folder onto app.netlify.com/drop, then open that link in iPad Safari.`);
+                          onNotify(`Downloaded ${fn} — contains the iPad PWA app folder plus separate Tutorial/ attachments.`);
                         } catch {
                           onNotify('Could not download iPad package.');
                         } finally {
@@ -550,109 +565,6 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
         </div>
       </div>
 
-      {/* Video Tutorial & Google NotebookLM Source Kit */}
-      {typeof window !== 'undefined' && window.location.protocol !== 'file:' && (
-        <div className="rounded-lg border border-slate-200 bg-white p-6 space-y-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h3 className="text-base font-semibold text-slate-900">
-                Video Tutorial &amp; Google NotebookLM Source Kit
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Upload the <strong>Visual Guide PDF</strong> (contains all 13 full-color app screenshots, formulas, start-to-finish walkthrough &amp; voiceover storyboard) directly into <strong>notebooklm.google.com → Add Sources</strong> to generate a complete Video Overview.
-              </p>
-            </div>
-            <span className="text-xs font-mono-tabular text-slate-500">
-              13 Screens · Live Demo Recording
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <button
-              type="button"
-              disabled={busyAction !== null}
-              onClick={async () => {
-                setBusyAction('tut-pdf');
-                try {
-                  const fn = await downloadTutorialAsset('pdf');
-                  onNotify(`Downloaded ${fn} — upload straight into Google NotebookLM.`);
-                } catch {
-                  onNotify('Could not download Visual Guide PDF.');
-                } finally {
-                  setBusyAction(null);
-                }
-              }}
-              className="flex items-center justify-between gap-3 rounded-lg px-4 py-3 text-left text-white transition-opacity hover:opacity-90 cursor-pointer disabled:opacity-50"
-              style={{ backgroundColor: EXCEL_THEMES[themeId].primary }}
-            >
-              <div className="min-w-0">
-                <div className="text-xs font-semibold truncate">
-                  {busyAction === 'tut-pdf' ? 'Preparing PDF...' : 'Visual Guide + 13 Screenshots (.pdf)'}
-                </div>
-                <div className="text-[11px] opacity-85 truncate">
-                  Best 1-file upload for NotebookLM
-                </div>
-              </div>
-              <BookOpen className="w-4 h-4 shrink-0" />
-            </button>
-
-            <button
-              type="button"
-              disabled={busyAction !== null}
-              onClick={async () => {
-                setBusyAction('tut-video');
-                try {
-                  const fn = await downloadTutorialAsset('video');
-                  onNotify(`Downloaded ${fn} — full start-to-finish live screen demo.`);
-                } catch {
-                  onNotify('Could not download Demo Walkthrough video.');
-                } finally {
-                  setBusyAction(null);
-                }
-              }}
-              className="flex items-center justify-between gap-3 rounded-lg border border-slate-300 bg-white px-4 py-3 text-left text-slate-900 hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-50"
-            >
-              <div className="min-w-0">
-                <div className="text-xs font-semibold truncate">
-                  {busyAction === 'tut-video' ? 'Preparing Video...' : 'Start-to-Finish Demo Video (.webm)'}
-                </div>
-                <div className="text-[11px] text-slate-500 truncate">
-                  Live recorded workflow from PI to Registry
-                </div>
-              </div>
-              <Video className="w-4 h-4 text-slate-700 shrink-0" />
-            </button>
-
-            <button
-              type="button"
-              disabled={busyAction !== null}
-              onClick={async () => {
-                setBusyAction('tut-md');
-                try {
-                  const fn = await downloadTutorialAsset('markdown');
-                  onNotify(`Downloaded ${fn} — Markdown guide & NotebookLM prompt.`);
-                } catch {
-                  onNotify('Could not download Markdown guide.');
-                } finally {
-                  setBusyAction(null);
-                }
-              }}
-              className="flex items-center justify-between gap-3 rounded-lg border border-slate-300 bg-white px-4 py-3 text-left text-slate-900 hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-50"
-            >
-              <div className="min-w-0">
-                <div className="text-xs font-semibold truncate">
-                  {busyAction === 'tut-md' ? 'Preparing Guide...' : 'Text Script & Storyboard (.md)'}
-                </div>
-                <div className="text-[11px] text-slate-500 truncate">
-                  Lightweight Markdown source + prompt
-                </div>
-              </div>
-              <FileText className="w-4 h-4 text-slate-700 shrink-0" />
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Live Editable Company Profile, Logo & End-User Dropdown (Zero Code Needed!) */}
       <div className="rounded-lg border border-slate-200 bg-white p-6 space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-100">
@@ -666,7 +578,16 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
           </div>
           <button
             type="button"
-            onClick={onResetCompany}
+            onClick={() =>
+              onRequestConfirm({
+                title: 'Reset Company Branding & Defaults?',
+                message:
+                  'This will restore the default Grand Group FZC logo, address, bank details, and standard End-User dropdown list.',
+                confirmLabel: 'Reset Defaults',
+                destructive: true,
+                onConfirm: onResetCompany,
+              })
+            }
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 cursor-pointer min-h-[36px] whitespace-nowrap"
           >
             <RotateCcw className="w-3.5 h-3.5" />

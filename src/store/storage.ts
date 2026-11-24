@@ -2,20 +2,62 @@ import defaultLogoUrl from '../assets/grand-group-logo.png?inline';
 import { COMPANY_INFO, END_USER_OPTIONS } from '../constants/themes';
 import {
   CompanyProfile,
+  CustomColumnDef,
+  CustomColumnPosition,
   DocPrefix,
+  IssuedDocRecord,
   JobItemRow,
   ProcurementJob,
   RegistryEntry,
   ThemeVariantId,
 } from '../types/procurement';
 
-const STORAGE_KEYS = {
+export const STORAGE_KEYS = {
   JOBS: 'gg_fzc_procurement_jobs_v1',
   REGISTRY: 'gg_fzc_master_registry_v1',
   THEME: 'gg_fzc_excel_theme_v1',
   ACTIVE_JOB: 'gg_fzc_active_job_id_v1',
   COMPANY: 'gg_fzc_company_profile_v1',
 };
+
+const VALID_PREFIXES: DocPrefix[] = ['QT', 'PI', 'PO', 'PL', 'DN', 'CI'];
+const VALID_COL_POSITIONS: CustomColumnPosition[] = [
+  'after_no',
+  'after_requested',
+  'after_offered',
+  'after_qty',
+  'end',
+];
+
+function safeStr(val: unknown, fallback = ''): string {
+  return typeof val === 'string' ? val : fallback;
+}
+
+function safeNullableNonNeg(val: unknown): number | null {
+  if (val === null || val === undefined || val === '') return null;
+  const n = typeof val === 'number' ? val : Number(val);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
+}
+
+function safeRate(val: unknown, fallback: number, max: number): number {
+  const n = typeof val === 'number' ? val : Number(val);
+  if (!Number.isFinite(n)) return fallback;
+  if (n < 0) return 0;
+  if (n > max) return max;
+  return n;
+}
+
+export function safeDeepClone<T>(value: T): T {
+  try {
+    if (typeof structuredClone === 'function') {
+      return structuredClone(value);
+    }
+  } catch {
+    // Fall back cleanly on older Safari/iPadOS engines
+  }
+  return JSON.parse(JSON.stringify(value)) as T;
+}
 
 export function createDefaultCompanyProfile(): CompanyProfile {
   return {
@@ -25,31 +67,54 @@ export function createDefaultCompanyProfile(): CompanyProfile {
   };
 }
 
-export function loadCompanyProfile(): CompanyProfile {
+export function normalizeCompanyProfile(raw: unknown): CompanyProfile {
   const defaults = createDefaultCompanyProfile();
+  if (!raw || typeof raw !== 'object') return defaults;
+  const parsed = raw as Partial<CompanyProfile>;
+  const cleanedEndUsers = Array.isArray(parsed.endUsers)
+    ? parsed.endUsers
+        .filter((u): u is string => typeof u === 'string' && u.trim().length > 0)
+        .map((u) => u.trim())
+    : [];
+
+  const uniqueEndUsers = Array.from(new Set(cleanedEndUsers));
+  if (uniqueEndUsers.length > 0 && !uniqueEndUsers.includes('OTHER')) {
+    uniqueEndUsers.push('OTHER');
+  }
+
+  return {
+    name: safeStr(parsed.name, defaults.name) || defaults.name,
+    tagline: safeStr(parsed.tagline, defaults.tagline),
+    addressLine1: safeStr(parsed.addressLine1, defaults.addressLine1),
+    addressLine2: safeStr(parsed.addressLine2, defaults.addressLine2),
+    phone: safeStr(parsed.phone, defaults.phone),
+    email: safeStr(parsed.email, defaults.email),
+    trn: safeStr(parsed.trn, defaults.trn),
+    bankDetails: safeStr(parsed.bankDetails, defaults.bankDetails),
+    logoDataUrl:
+      typeof parsed.logoDataUrl === 'string' && parsed.logoDataUrl.startsWith('data:image/')
+        ? parsed.logoDataUrl
+        : defaults.logoDataUrl,
+    endUsers: uniqueEndUsers.length > 0 ? uniqueEndUsers : defaults.endUsers,
+  };
+}
+
+export function loadCompanyProfile(): CompanyProfile {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.COMPANY);
-    if (!raw) return defaults;
-    const parsed = JSON.parse(raw) as Partial<CompanyProfile>;
-    return {
-      ...defaults,
-      ...parsed,
-      logoDataUrl: parsed.logoDataUrl || defaults.logoDataUrl,
-      endUsers:
-        Array.isArray(parsed.endUsers) && parsed.endUsers.length > 0
-          ? parsed.endUsers
-          : defaults.endUsers,
-    };
+    if (!raw) return createDefaultCompanyProfile();
+    return normalizeCompanyProfile(JSON.parse(raw));
   } catch {
-    return defaults;
+    return createDefaultCompanyProfile();
   }
 }
 
-export function saveCompanyProfile(profile: CompanyProfile): void {
+export function saveCompanyProfile(profile: CompanyProfile): boolean {
   try {
     localStorage.setItem(STORAGE_KEYS.COMPANY, JSON.stringify(profile));
+    return true;
   } catch {
-    // Ignore storage quota errors
+    return false;
   }
 }
 
@@ -78,7 +143,7 @@ export function createBlankJob(name?: string): ProcurementJob {
   const id = `job-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   return {
     id,
-    jobName: name || `New Procurement Job`,
+    jobName: name || 'Procurement Job #1',
     createdAt: now,
     updatedAt: now,
     preparedBy: 'Procurement Desk',
@@ -90,8 +155,8 @@ export function createBlankJob(name?: string): ProcurementJob {
       currency: 'USD',
       incoterm: 'CIF',
       destination: 'Massawa Seaport',
+      includeVat: true,
       vatRate: 0.05,
-      quoteValidityDays: 30,
       paymentTerms: '50% Advance with PO, 50% Prior to Shipment',
       deliveryLeadTime: '4–6 Weeks from PO Confirmation',
       rfqRef: '',
@@ -112,107 +177,12 @@ export function createBlankJob(name?: string): ProcurementJob {
       ratePerCbm: 185,
       ratePerKg: 2.4,
       docChargePct: 0.1,
-      selectedMarkupPct: 0.15,
+      selectedMarkupPct: 0.2,
     },
     customColumns: [],
     items: createEmptyItems(),
     issuedDocs: {},
   };
-}
-
-export function createSampleJob(): ProcurementJob {
-  const job = createBlankJob('AIAA Runway Lighting & Spares');
-  job.id = 'job-sample-aiaa-2026';
-  job.controls = {
-    ...job.controls,
-    endUserSelect: 'AIAA (Asmara International Airport)',
-    endUserContact: 'Eng. Tesfay Ghebrehiwet — Technical Procurement',
-    endUserAddress: 'Asmara International Airport Authority, Asmara',
-    currency: 'USD',
-    incoterm: 'CIF',
-    destination: 'Massawa Seaport',
-    vatRate: 0.05,
-    rfqRef: 'RFQ-AIAA-2026-019',
-    customerPoRef: 'PO-AIAA-8841',
-    supplierName: 'Al-Futtaim Industrial & Aviation Supplies LLC',
-    supplierAddress: 'Jebel Ali Free Zone South, Dubai, UAE',
-    supplierRef: 'SQ-AFI-2026-412',
-    shipDate: '2026-12-08',
-    portOfLoading: 'Jebel Ali Port, UAE',
-    deliveryDate: '2026-12-19',
-    transportRef: 'BL-MSC-774920 / Truck ER-402',
-    receivedBy: 'Storekeeper — AIAA Central Warehouse',
-    counterpartySignatory: 'Received in Good Order — Storekeeper — AIAA Central Warehouse',
-  };
-
-  const seededRows: Partial<JobItemRow>[] = [
-    {
-      requestedDescription: 'LED Elevated Runway Edge Light, Bi-Directional 6.6A',
-      offeredDescription: 'ADB Safegate EL-E-LED Elevated Edge Light Assembly, FAA L-862, 6.6A',
-      uom: 'PCS',
-      qty: 24,
-      supplierUnitCost: 285,
-      boxes: 4,
-      boxLengthCm: 60,
-      boxWidthCm: 45,
-      boxHeightCm: 40,
-      kgPerBox: 18.5,
-      cartonNo: 'CTN 01–04',
-      netWtKg: 66.0,
-      grossWtKg: 74.0,
-    },
-    {
-      requestedDescription: 'Isolation Transformer 100W 6.6A/6.6A Series Circuit',
-      offeredDescription: 'Eaton Crouse-Hinds 100W 6.6A/6.6A Encapsulated Isolation Transformer',
-      uom: 'PCS',
-      qty: 24,
-      supplierUnitCost: 72,
-      boxes: 3,
-      boxLengthCm: 50,
-      boxWidthCm: 40,
-      boxHeightCm: 32,
-      kgPerBox: 22.0,
-      cartonNo: 'CTN 05–07',
-      netWtKg: 61.2,
-      grossWtKg: 66.0,
-    },
-    {
-      requestedDescription: 'Primary Airport Lighting Cable 5kV 1x6mm2 Copper',
-      offeredDescription: 'Prysmian FAA L-824 Type C 5kV 1x6mm2 XLPE Shielded Cable (500m Drum)',
-      uom: 'ROLL',
-      qty: 4,
-      supplierUnitCost: 940,
-      boxes: 4,
-      boxLengthCm: 85,
-      boxWidthCm: 85,
-      boxHeightCm: 62,
-      kgPerBox: 88.0,
-      cartonNo: 'DRUM 08–11',
-      netWtKg: 328.0,
-      grossWtKg: 352.0,
-    },
-    {
-      requestedDescription: 'Waterproof Primary Connector Kit L-823 Style 2/9',
-      offeredDescription: 'Amerace L-823 Molded Primary Plug & Receptacle Kit (54-D4-D4)',
-      uom: 'SET',
-      qty: 40,
-      supplierUnitCost: 28.5,
-      boxes: 2,
-      boxLengthCm: 42,
-      boxWidthCm: 34,
-      boxHeightCm: 28,
-      kgPerBox: 11.5,
-      cartonNo: 'CTN 12–13',
-      netWtKg: 20.4,
-      grossWtKg: 23.0,
-    },
-  ];
-
-  seededRows.forEach((data, idx) => {
-    job.items[idx] = { ...job.items[idx], ...data };
-  });
-
-  return job;
 }
 
 // Seeded with PI-GG-042-2026 so the next claimed document number is strictly 43
@@ -235,66 +205,239 @@ export function createSeededRegistry(): RegistryEntry[] {
   ];
 }
 
-export function normalizeJob(job: ProcurementJob): ProcurementJob {
+export function normalizeJob(raw: unknown): ProcurementJob {
+  const fallback = createBlankJob('Procurement Job #1');
+  if (!raw || typeof raw !== 'object') return fallback;
+  const src = raw as Partial<ProcurementJob>;
+  const rawCtrl = (src.controls && typeof src.controls === 'object' ? src.controls : {}) as Partial<
+    ProcurementJob['controls']
+  >;
+  const rawFreight = (src.freight && typeof src.freight === 'object' ? src.freight : {}) as Partial<
+    ProcurementJob['freight']
+  >;
+
+  const vatRate = safeRate(rawCtrl.vatRate, 0.05, 1);
+  // Backward-compatible: older saved jobs without `includeVat` infer true if vatRate > 0
+  const includeVat =
+    typeof rawCtrl.includeVat === 'boolean' ? rawCtrl.includeVat : vatRate > 0;
+
+  const customColumns: CustomColumnDef[] = Array.isArray(src.customColumns)
+    ? src.customColumns
+        .filter(
+          (c): c is CustomColumnDef =>
+            Boolean(c && typeof c === 'object' && typeof c.id === 'string' && typeof c.label === 'string' && c.label.trim())
+        )
+        .slice(0, 4)
+        .map((c) => ({
+          id: c.id.trim(),
+          label: c.label.trim(),
+          position:
+            c.position && VALID_COL_POSITIONS.includes(c.position) ? c.position : 'after_no',
+        }))
+    : [];
+
+  const rawItems = Array.isArray(src.items) ? src.items : [];
+  const items: JobItemRow[] = Array.from({ length: 20 }, (_, idx) => {
+    const it = (rawItems[idx] && typeof rawItems[idx] === 'object'
+      ? rawItems[idx]
+      : {}) as Partial<JobItemRow>;
+    const rawCustom =
+      it.customFields && typeof it.customFields === 'object' ? it.customFields : {};
+    const cleanCustom: Record<string, string> = {};
+    for (const [k, v] of Object.entries(rawCustom)) {
+      if (typeof v === 'string') cleanCustom[k] = v;
+    }
+    return {
+      rowNumber: 17 + idx,
+      requestedDescription: safeStr(it.requestedDescription),
+      offeredDescription: safeStr(it.offeredDescription),
+      uom: safeStr(it.uom),
+      qty: safeNullableNonNeg(it.qty),
+      customFields: cleanCustom,
+      supplierUnitCost: safeNullableNonNeg(it.supplierUnitCost),
+      boxes: safeNullableNonNeg(it.boxes),
+      boxLengthCm: safeNullableNonNeg(it.boxLengthCm),
+      boxWidthCm: safeNullableNonNeg(it.boxWidthCm),
+      boxHeightCm: safeNullableNonNeg(it.boxHeightCm),
+      kgPerBox: safeNullableNonNeg(it.kgPerBox),
+      cartonNo: safeStr(it.cartonNo),
+      netWtKg: safeNullableNonNeg(it.netWtKg),
+      grossWtKg: safeNullableNonNeg(it.grossWtKg),
+    };
+  });
+
+  const issuedDocs: Partial<Record<DocPrefix, IssuedDocRecord>> = {};
+  if (src.issuedDocs && typeof src.issuedDocs === 'object') {
+    for (const prefix of VALID_PREFIXES) {
+      const rec = (src.issuedDocs as Record<string, unknown>)[prefix];
+      if (rec && typeof rec === 'object') {
+        const r = rec as Partial<IssuedDocRecord>;
+        if (typeof r.docNumber === 'string' && typeof r.sequence === 'number' && Number.isFinite(r.sequence)) {
+          issuedDocs[prefix] = {
+            prefix,
+            docNumber: r.docNumber,
+            sequence: Math.floor(r.sequence),
+            issuedAt: safeStr(r.issuedAt, fallback.createdAt),
+            issuedBy: safeStr(r.issuedBy, 'Procurement Desk'),
+            isVoided: Boolean(r.isVoided),
+            frozenSubtotal: safeNullableNonNeg(r.frozenSubtotal) ?? 0,
+            frozenVat: safeNullableNonNeg(r.frozenVat) ?? 0,
+            frozenFreight: safeNullableNonNeg(r.frozenFreight) ?? 0,
+            frozenGrandTotal: safeNullableNonNeg(r.frozenGrandTotal) ?? 0,
+          };
+        }
+      }
+    }
+  }
+
   return {
-    ...job,
-    customColumns: Array.isArray(job.customColumns) ? job.customColumns : [],
+    id: safeStr(src.id, fallback.id) || fallback.id,
+    jobName: safeStr(src.jobName, fallback.jobName) || fallback.jobName,
+    createdAt: safeStr(src.createdAt, fallback.createdAt),
+    updatedAt: safeStr(src.updatedAt, fallback.updatedAt),
+    preparedBy: safeStr(src.preparedBy, fallback.preparedBy),
     controls: {
-      ...job.controls,
+      endUserSelect: safeStr(rawCtrl.endUserSelect, fallback.controls.endUserSelect),
+      customEndUser: safeStr(rawCtrl.customEndUser, fallback.controls.customEndUser),
+      endUserContact: safeStr(rawCtrl.endUserContact, fallback.controls.endUserContact),
+      endUserAddress: safeStr(rawCtrl.endUserAddress, fallback.controls.endUserAddress),
+      currency: safeStr(rawCtrl.currency, fallback.controls.currency) || 'USD',
+      incoterm: safeStr(rawCtrl.incoterm, fallback.controls.incoterm) || 'CIF',
+      destination: safeStr(rawCtrl.destination, fallback.controls.destination),
+      includeVat,
+      vatRate,
+      paymentTerms: safeStr(rawCtrl.paymentTerms, fallback.controls.paymentTerms),
+      deliveryLeadTime: safeStr(rawCtrl.deliveryLeadTime, fallback.controls.deliveryLeadTime),
+      rfqRef: safeStr(rawCtrl.rfqRef),
+      customerPoRef: safeStr(rawCtrl.customerPoRef),
+      supplierName: safeStr(rawCtrl.supplierName),
+      supplierAddress: safeStr(rawCtrl.supplierAddress),
+      supplierRef: safeStr(rawCtrl.supplierRef),
+      shipDate: safeStr(rawCtrl.shipDate),
+      portOfLoading: safeStr(rawCtrl.portOfLoading, fallback.controls.portOfLoading),
+      deliveryDate: safeStr(rawCtrl.deliveryDate),
+      transportRef: safeStr(rawCtrl.transportRef),
+      receivedBy: safeStr(rawCtrl.receivedBy),
+      remarks:
+        typeof rawCtrl.remarks === 'string' ? rawCtrl.remarks : fallback.controls.remarks,
       authorizedSignatory:
-        typeof job.controls.authorizedSignatory === 'string'
-          ? job.controls.authorizedSignatory
-          : 'Authorized Signature — GRAND GROUP FZC',
+        typeof rawCtrl.authorizedSignatory === 'string'
+          ? rawCtrl.authorizedSignatory
+          : fallback.controls.authorizedSignatory,
       counterpartySignatory:
-        typeof job.controls.counterpartySignatory === 'string'
-          ? job.controls.counterpartySignatory
-          : 'Customer / Supplier Acknowledgment',
+        typeof rawCtrl.counterpartySignatory === 'string'
+          ? rawCtrl.counterpartySignatory
+          : fallback.controls.counterpartySignatory,
     },
-    items: (job.items || createEmptyItems()).map((it, idx) => ({
-      ...it,
-      rowNumber: it.rowNumber || 17 + idx,
-      customFields: it.customFields || {},
-    })),
+    freight: {
+      ratePerCbm: safeNullableNonNeg(rawFreight.ratePerCbm) ?? fallback.freight.ratePerCbm,
+      ratePerKg: safeNullableNonNeg(rawFreight.ratePerKg) ?? fallback.freight.ratePerKg,
+      docChargePct: safeRate(rawFreight.docChargePct, fallback.freight.docChargePct, 1),
+      selectedMarkupPct: safeRate(
+        rawFreight.selectedMarkupPct,
+        fallback.freight.selectedMarkupPct,
+        5
+      ),
+    },
+    customColumns,
+    items,
+    issuedDocs,
   };
 }
 
-export function loadJobs(): ProcurementJob[] {
+export function normalizeRegistryEntries(raw: unknown): RegistryEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const valid: RegistryEntry[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const e = item as Partial<RegistryEntry>;
+    const prefix = typeof e.prefix === 'string' ? (e.prefix.toUpperCase() as DocPrefix) : null;
+    if (
+      typeof e.sequence !== 'number' ||
+      !Number.isFinite(e.sequence) ||
+      !prefix ||
+      !VALID_PREFIXES.includes(prefix) ||
+      typeof e.docNumber !== 'string' ||
+      !e.docNumber.trim()
+    ) {
+      continue;
+    }
+    valid.push({
+      sequence: Math.floor(e.sequence),
+      docNumber: e.docNumber.trim(),
+      prefix,
+      year:
+        typeof e.year === 'number' && Number.isFinite(e.year)
+          ? Math.floor(e.year)
+          : new Date().getFullYear(),
+      jobId: safeStr(e.jobId, `reg-${e.sequence}`),
+      jobName: safeStr(e.jobName, 'Untitled Job'),
+      customer: safeStr(e.customer, '—'),
+      currency: safeStr(e.currency, 'USD') || 'USD',
+      amount: safeNullableNonNeg(e.amount) ?? 0,
+      issuedBy: safeStr(e.issuedBy, 'Procurement Desk'),
+      issuedAt: safeStr(e.issuedAt, new Date().toISOString()),
+      status: e.status === 'VOID' ? 'VOID' : 'ISSUED',
+      voidReason: typeof e.voidReason === 'string' ? e.voidReason : undefined,
+    });
+  }
+  return valid;
+}
+
+export function loadJobsWithHealth(): { jobs: ProcurementJob[]; recovered: boolean } {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.JOBS);
-    if (!raw) return [createSampleJob()];
-    const parsed = JSON.parse(raw) as ProcurementJob[];
-    if (!Array.isArray(parsed) || parsed.length === 0) return [createSampleJob()];
-    return parsed.map(normalizeJob);
+    if (!raw) return { jobs: [createBlankJob('Procurement Job #1')], recovered: false };
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return { jobs: [createBlankJob('Procurement Job #1')], recovered: true };
+    }
+    const validRaw = parsed.filter((entry) => entry && typeof entry === 'object');
+    if (validRaw.length === 0) {
+      return { jobs: [createBlankJob('Procurement Job #1')], recovered: true };
+    }
+    return {
+      jobs: validRaw.map((j) => normalizeJob(j)),
+      recovered: validRaw.length !== parsed.length,
+    };
   } catch {
-    return [createSampleJob()];
+    return { jobs: [createBlankJob('Procurement Job #1')], recovered: true };
   }
 }
 
-export function saveJobs(jobs: ProcurementJob[]): void {
+export function saveJobs(jobs: ProcurementJob[]): boolean {
   try {
     localStorage.setItem(STORAGE_KEYS.JOBS, JSON.stringify(jobs));
+    return true;
   } catch {
-    // Ignore quota errors gracefully
+    return false;
   }
 }
 
-export function loadRegistry(): RegistryEntry[] {
+export function loadRegistryWithHealth(): { entries: RegistryEntry[]; recovered: boolean } {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.REGISTRY);
-    if (!raw) return createSeededRegistry();
-    const parsed = JSON.parse(raw) as RegistryEntry[];
-    if (!Array.isArray(parsed) || parsed.length === 0) return createSeededRegistry();
-    return parsed;
+    if (!raw) return { entries: createSeededRegistry(), recovered: false };
+    const parsed = JSON.parse(raw);
+    const cleaned = normalizeRegistryEntries(parsed);
+    if (cleaned.length === 0) {
+      return { entries: createSeededRegistry(), recovered: true };
+    }
+    return {
+      entries: cleaned,
+      recovered: Array.isArray(parsed) && cleaned.length !== parsed.length,
+    };
   } catch {
-    return createSeededRegistry();
+    return { entries: createSeededRegistry(), recovered: true };
   }
 }
 
-export function saveRegistry(entries: RegistryEntry[]): void {
+export function saveRegistry(entries: RegistryEntry[]): boolean {
   try {
     localStorage.setItem(STORAGE_KEYS.REGISTRY, JSON.stringify(entries));
+    return true;
   } catch {
-    // Ignore quota errors gracefully
+    return false;
   }
 }
 
@@ -312,7 +455,7 @@ export function saveThemeVariant(theme: ThemeVariantId): void {
   try {
     localStorage.setItem(STORAGE_KEYS.THEME, theme);
   } catch {
-    // Ignore
+    // Ignore theme preference errors
   }
 }
 
@@ -330,7 +473,7 @@ export function saveActiveJobId(id: string): void {
   try {
     localStorage.setItem(STORAGE_KEYS.ACTIVE_JOB, id);
   } catch {
-    // Ignore
+    // Ignore active-job pointer errors
   }
 }
 
@@ -343,4 +486,36 @@ export function formatDocNumber(prefix: DocPrefix, sequence: number, year?: numb
   const yr = year ?? new Date().getFullYear();
   const padded = String(sequence).padStart(3, '0');
   return `${prefix}-GG-${padded}-${yr}`;
+}
+
+export function exportEmergencyRawStorageJson(): string {
+  const dump: Record<string, unknown> = {
+    exportedAt: new Date().toISOString(),
+    emergencyRecovery: true,
+  };
+  for (const [label, key] of Object.entries(STORAGE_KEYS)) {
+    try {
+      const val = localStorage.getItem(key);
+      if (val !== null) {
+        try {
+          dump[label] = JSON.parse(val);
+        } catch {
+          dump[label] = val;
+        }
+      }
+    } catch {
+      dump[label] = null;
+    }
+  }
+  return JSON.stringify(dump, null, 2);
+}
+
+export function clearAllAppStorage(): void {
+  for (const key of Object.values(STORAGE_KEYS)) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Ignore
+    }
+  }
 }

@@ -44,7 +44,7 @@ export const PWAInstallButton: React.FC = () => {
         className="w-full flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 transition-colors cursor-pointer min-h-[38px] whitespace-nowrap disabled:opacity-60"
       >
         <Monitor className="w-3.5 h-3.5 shrink-0" />
-        <span>{downloading === 'windows' ? 'Preparing...' : 'Windows Offline (.html)'}</span>
+        <span>{downloading === 'windows' ? 'Preparing...' : 'Windows Offline (.zip)'}</span>
       </button>
 
       <button
@@ -54,7 +54,7 @@ export const PWAInstallButton: React.FC = () => {
         className="w-full flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer min-h-[38px] whitespace-nowrap disabled:opacity-60"
       >
         <Tablet className="w-3.5 h-3.5 shrink-0" />
-        <span>{downloading === 'ipad' ? 'Preparing...' : 'iPad / iOS Version'}</span>
+        <span>{downloading === 'ipad' ? 'Preparing...' : 'iPad / iOS Version (.zip)'}</span>
       </button>
 
       {isInstallable && !isInstalled && (
@@ -90,12 +90,12 @@ export const PWAInstallButton: React.FC = () => {
             </div>
 
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-              <strong>Why iPad needs a 1-time 30-second setup:</strong> Apple&apos;s built-in <strong>Files</strong> app blocks code inside local <code>.html</code> files (blank screen). Hosting the unzipped folder once gives you a private link that installs onto your iPad Home Screen and then works 100% offline in Airplane Mode.
+              <strong>Why iPad needs a 1-time 30-second setup:</strong> Apple&apos;s built-in <strong>Files</strong> app blocks code inside local <code>.html</code> files (blank screen). Hosting the unzipped app folder once gives you a private link that installs onto your iPad Home Screen and then works 100% offline in Airplane Mode.
             </div>
 
             <ol className="space-y-3 text-xs text-slate-700 list-decimal pl-4">
               <li>
-                <strong className="text-slate-900">Download &amp; Unzip:</strong> Click below to download <code>Grand_Group_iPad_App.zip</code>, then unzip it so you see the folder <code>Grand_Group_iPad_App</code> (contains <code>index.html</code>, offline cache <code>sw.js</code>, and your Grand Group icon).
+                <strong className="text-slate-900">Download &amp; Unzip:</strong> Click below to download <code>Grand_Group_iPad_App.zip</code>, then unzip it. You will see the clean app folder <code>Grand_Group_iPad_App</code> plus a separate <code>Tutorial/</code> attachment folder.
               </li>
               <li>
                 <strong className="text-slate-900">Get Your Private Link (Free, 10 sec):</strong> Open <code>app.netlify.com/drop</code> on a laptop/PC and drag the unzipped <strong><code>Grand_Group_iPad_App</code> folder</strong> into the box. Copy the <code>https://...netlify.app</code> link it gives you.

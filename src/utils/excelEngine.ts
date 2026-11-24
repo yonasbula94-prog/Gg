@@ -16,7 +16,7 @@ import {
   ThemePalette,
   ThemeVariantId,
 } from '../types/procurement';
-import { calculateJob, formatPct, getResolvedEndUser } from './calculations';
+import { calculateJob, getResolvedEndUser } from './calculations';
 import { createBlankJob } from '../store/storage';
 import { shareOrDownloadBlob } from './platform';
 import { ParsedSupplierQuote, parseGenericSupplierXlsx } from './supplierQuoteParser';
@@ -506,12 +506,10 @@ export async function exportIssuedDocumentXlsx(
     }
     cursor += 2;
   } else {
-    // QT / PI / CI: SUBTOTAL -> VAT (goods only) -> FREIGHT (separate line after VAT) -> GRAND TOTAL
+    // QT / PI / CI: End-user documents show Goods Subtotal (VAT already included in Unit Price) -> Freight -> Grand Total (ZERO VAT row)
     const valCol = colNumOf('total');
-    const vatPctLabel = formatPct(job.controls.vatRate);
     const summaryLines: [string, number, boolean][] = [
       ['GOODS SUBTOTAL', calc.goodsSubtotal, false],
-      [`VAT (${vatPctLabel} on Goods)`, calc.vatAmount, false],
       [`FREIGHT & DOCUMENTATION (${job.controls.incoterm})`, calc.customerFreight, false],
       [`GRAND TOTAL (${job.controls.currency})`, calc.grandTotal, true],
     ];
@@ -624,12 +622,12 @@ export async function exportJobTemplateXlsx(
 
   const guideRows: [string, string][] = [
     ['1. Single Entry Point', 'Enter items ONCE on PROFORMA INVOICE rows 17–36 (Requested Description, Offered Description, UoM, Qty). Never insert or sort rows on a single tab.'],
-    ['2. Internal Costing', 'Enter Supplier Unit Cost, Boxes, Box L/W/H (cm), and Kg/Box on PRICE CALC rows 17–36. Select active markup (10%, 15%, 18%, 20%) in PRICE CALC!E3.'],
-    ['3. Confirmed Formula Basis', 'Markup on cost: Unit Price = Supplier Cost * (1 + %). PRICE CALC Column R feeds PI Unit Price. VAT (PI!L5, default 5%, 0% for zero-rated) applies to goods subtotal ONLY.'],
-    ['4. Freight Calculation', 'Base Freight = MAX(Total CBM * Rate/CBM, Total Gross KG * Rate/KG). Documentation charge (default 10%) is added first, then selected markup % is applied. Shown as a separate line after VAT.'],
+    ['2. Internal Costing & VAT', 'Enter Supplier Unit Cost, Boxes, Box L/W/H (cm), and Kg/Box on PRICE CALC rows 17–36. Set active markup % in PRICE CALC!E3 and internal VAT % in PRICE CALC!E4 (set to 0% to remove VAT).'],
+    ['3. Confidential Unit Pricing', 'Unit Price = ROUND(Supplier Cost * (1 + Markup %) * (1 + Internal VAT %), 2). PRICE CALC Column R feeds PI Unit Price directly so end-user documents NEVER show a separate VAT row.'],
+    ['4. Freight Calculation', 'Base Freight = MAX(Total CBM * Rate/CBM, Total Gross KG * Rate/KG). Documentation charge (default 10%) is added first, then selected markup % is applied. Shown as a separate line before Grand Total.'],
     ['5. Sequential Numbering', 'Claim numbers exclusively from Master_Registry.xlsx (PREFIX-GG-SEQ-YEAR). Seeded at PI-GG-042-2026; next sequence is 43.'],
     ['6. Issuing & Confidentiality', 'Export values-only .xlsx per document tab. NEVER send PRICE CALC or the master job workbook to customers.'],
-    ['7. End-User List (Updated)', 'CONTROLS!A2:A10 contains the confirmed 9-item list including Pharmecore (corrected from Pharmaco) and OTHER.'],
+    ['7. End-User List (Updated)', 'CONTROLS!A2:A10 contains the confirmed end-user dropdown list including Pharmecore and OTHER.'],
   ];
 
   guideRows.forEach(([title, desc], idx) => {
@@ -688,25 +686,24 @@ export async function exportJobTemplateXlsx(
   wsPI.getCell('B11').value = 'CUSTOMER PO:';
   wsPI.getCell('C11').value = includeCurrentData ? job.controls.customerPoRef : '';
 
-  // Controls block K2:L8 (PI!L5 = VAT%)
+  // Controls block K2:L7 (End-user safe: NO VAT cell exposed on PI)
   wsPI.getCell('K2').value = 'JOB CONTROLS';
   wsPI.getCell('K2').font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.headerFont } };
   wsPI.getCell('K2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.accentFill } };
   wsPI.getCell('L2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.accentFill } };
 
-  const piControls: [number, string, string | number, string?][] = [
+  const piControls: [number, string, string | number][] = [
     [3, 'Currency', includeCurrentData ? job.controls.currency : 'USD'],
     [4, 'Incoterm', includeCurrentData ? job.controls.incoterm : 'CIF'],
-    [5, 'VAT Rate (PI!L5)', includeCurrentData ? job.controls.vatRate : 0.05, '0.##%'],
-    [6, 'Destination', includeCurrentData ? job.controls.destination : 'Massawa Seaport'],
-    [7, 'Payment Terms', includeCurrentData ? job.controls.paymentTerms : '50% Advance, 50% Pre-Ship'],
+    [5, 'Destination', includeCurrentData ? job.controls.destination : 'Massawa Seaport'],
+    [6, 'Payment Terms', includeCurrentData ? job.controls.paymentTerms : '50% Advance with PO, 50% Prior to Shipment'],
+    [7, 'Lead Time', includeCurrentData ? job.controls.deliveryLeadTime : '4–6 Weeks from PO Confirmation'],
   ];
-  piControls.forEach(([rowIdx, lbl, val, fmt]) => {
+  piControls.forEach(([rowIdx, lbl, val]) => {
     wsPI.getCell(rowIdx, 11).value = lbl;
     wsPI.getCell(rowIdx, 11).font = { name: 'Calibri', size: 9, bold: true, color: { argb: 'FF475569' } };
     wsPI.getCell(rowIdx, 12).value = val;
     wsPI.getCell(rowIdx, 12).font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.inputFont } };
-    if (fmt) wsPI.getCell(rowIdx, 12).numFmt = fmt;
     wsPI.getCell(rowIdx, 11).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.subHeaderFill } };
     wsPI.getCell(rowIdx, 12).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.subHeaderFill } };
     wsPI.getCell(rowIdx, 11).border = { bottom: thinBorder(theme.excel.borderColor) };
@@ -761,12 +758,11 @@ export async function exportJobTemplateXlsx(
     wsPI.getCell(r, 8).numFmt = '#,##0.00';
   }
 
-  // PI Totals (Rows 38-41)
+  // PI Totals (Rows 38-40 — ZERO VAT row on customer-facing PI)
   const piSummary: [number, string, string, boolean][] = [
     [38, 'GOODS SUBTOTAL', 'SUM(H17:H36)', false],
-    [39, 'VAT (Goods Subtotal Only)', 'H38*L5', false],
-    [40, 'FREIGHT & DOCUMENTATION', "'PRICE CALC'!R41", false],
-    [41, 'GRAND TOTAL', 'H38+H39+H40', true],
+    [39, 'FREIGHT & DOCUMENTATION', "'PRICE CALC'!R41", false],
+    [40, 'GRAND TOTAL', 'H38+H39', true],
   ];
   piSummary.forEach(([r, label, formula, isGrand]) => {
     wsPI.getRow(r).height = isGrand ? 26 : 21;
@@ -820,12 +816,12 @@ export async function exportJobTemplateXlsx(
   wsPC.getCell('B2').alignment = { vertical: 'middle', indent: 1 };
   wsPC.getRow(2).height = 28;
 
-  // Controls Row 3: E3 = Selected Markup %, J3 = Rate/CBM, L3 = Rate/KG, N3 = Doc Charge %
+  // Controls Row 3: E3 = Selected Markup %, I3 = Rate/CBM, L3 = Rate/KG, O3 = Doc Charge %
   wsPC.getRow(3).height = 22;
   wsPC.getCell('B3').value = 'ACTIVE MARKUP (E3):';
   wsPC.mergeCells('B3:D3');
   wsPC.getCell('B3').font = { name: 'Calibri', size: 10, bold: true };
-  wsPC.getCell('E3').value = includeCurrentData ? job.freight.selectedMarkupPct : 0.15;
+  wsPC.getCell('E3').value = includeCurrentData ? job.freight.selectedMarkupPct : 0.2;
   wsPC.getCell('E3').numFmt = '0.##%';
   wsPC.getCell('E3').font = { name: 'Calibri', size: 11, bold: true, color: { argb: theme.excel.inputFont } };
   wsPC.getCell('E3').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
@@ -844,6 +840,25 @@ export async function exportJobTemplateXlsx(
   wsPC.getCell('O3').value = includeCurrentData ? job.freight.docChargePct : 0.1;
   wsPC.getCell('O3').numFmt = '0.##%';
   wsPC.getCell('O3').font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.inputFont } };
+
+  // Controls Row 4: E4 = Internal VAT % (Baked into Unit Prices Cols N..R; set 0% to remove VAT)
+  const effectiveVat = includeCurrentData
+    ? job.controls.includeVat !== false
+      ? job.controls.vatRate
+      : 0
+    : 0.05;
+  wsPC.getRow(4).height = 22;
+  wsPC.getCell('B4').value = 'INTERNAL VAT (E4 — 0% to remove):';
+  wsPC.mergeCells('B4:D4');
+  wsPC.getCell('B4').font = { name: 'Calibri', size: 9, bold: true, color: { argb: 'FF991B1B' } };
+  wsPC.getCell('E4').value = effectiveVat;
+  wsPC.getCell('E4').numFmt = '0.##%';
+  wsPC.getCell('E4').font = { name: 'Calibri', size: 11, bold: true, color: { argb: theme.excel.inputFont } };
+  wsPC.getCell('E4').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+  wsPC.mergeCells('H4:R4');
+  wsPC.getCell('H4').value =
+    'Internal VAT (E4) is folded directly into Unit Prices (Cols N–R). End-user sheets (PI / QT / CI) NEVER show a VAT line.';
+  wsPC.getCell('H4').font = { name: 'Calibri', size: 9, italic: true, color: { argb: 'FF64748B' } };
 
   const pcHeaders = [
     'No.', 'Offered Description', 'Qty', 'Supplier Cost', 'Supplier Total',
@@ -876,12 +891,12 @@ export async function exportJobTemplateXlsx(
     wsPC.getCell(r, 11).value = { formula: `IF(OR(G${r}="",H${r}="",I${r}="",J${r}=""),"",(G${r}*H${r}*I${r}*J${r})/1000000)` };
     wsPC.getCell(r, 12).value = item && item.kgPerBox !== null ? item.kgPerBox : null;
     wsPC.getCell(r, 13).value = { formula: `IF(OR(G${r}="",L${r}=""),"",G${r}*L${r})` };
-    // Markup on cost: cost * (1 + %)
-    wsPC.getCell(r, 14).value = { formula: `IF(E${r}="","",ROUND(E${r}*1.10,2))` };
-    wsPC.getCell(r, 15).value = { formula: `IF(E${r}="","",ROUND(E${r}*1.15,2))` };
-    wsPC.getCell(r, 16).value = { formula: `IF(E${r}="","",ROUND(E${r}*1.18,2))` };
-    wsPC.getCell(r, 17).value = { formula: `IF(E${r}="","",ROUND(E${r}*1.20,2))` };
-    wsPC.getCell(r, 18).value = { formula: `IF(E${r}="","",ROUND(E${r}*(1+$E$3),2))` };
+    // Markup + Internal VAT folded into Unit Price: ROUND(Cost * (1 + Markup) * (1 + $E$4), 2)
+    wsPC.getCell(r, 14).value = { formula: `IF(E${r}="","",ROUND(E${r}*1.10*(1+$E$4),2))` };
+    wsPC.getCell(r, 15).value = { formula: `IF(E${r}="","",ROUND(E${r}*1.15*(1+$E$4),2))` };
+    wsPC.getCell(r, 16).value = { formula: `IF(E${r}="","",ROUND(E${r}*1.18*(1+$E$4),2))` };
+    wsPC.getCell(r, 17).value = { formula: `IF(E${r}="","",ROUND(E${r}*1.20*(1+$E$4),2))` };
+    wsPC.getCell(r, 18).value = { formula: `IF(E${r}="","",ROUND(E${r}*(1+$E$3)*(1+$E$4),2))` };
 
     for (let c = 2; c <= 18; c++) {
       const cell = wsPC.getCell(r, c);
@@ -1100,16 +1115,14 @@ export async function exportJobTemplateXlsx(
     if (!isLogistics && !isPO) {
       ws.getCell(38, priceCol).value = 'SUBTOTAL';
       ws.getCell(38, totalCol).value = { formula: `SUM(${totalLet}17:${totalLet}36)` };
-      ws.getCell(39, priceCol).value = 'VAT';
-      ws.getCell(39, totalCol).value = { formula: `${totalLet}38*'PROFORMA INVOICE'!L5` };
-      ws.getCell(40, priceCol).value = 'FREIGHT';
-      ws.getCell(40, totalCol).value = { formula: "'PROFORMA INVOICE'!H40" };
-      ws.getCell(41, priceCol).value = 'GRAND TOTAL';
-      ws.getCell(41, totalCol).value = { formula: `${totalLet}38+${totalLet}39+${totalLet}40` };
-      [38, 39, 40, 41].forEach((r) => {
+      ws.getCell(39, priceCol).value = 'FREIGHT';
+      ws.getCell(39, totalCol).value = { formula: "'PROFORMA INVOICE'!H39" };
+      ws.getCell(40, priceCol).value = 'GRAND TOTAL';
+      ws.getCell(40, totalCol).value = { formula: `${totalLet}38+${totalLet}39` };
+      [38, 39, 40].forEach((r) => {
         ws.getCell(r, totalCol).numFmt = '#,##0.00';
-        ws.getCell(r, priceCol).font = { name: 'Calibri', size: 10, bold: r === 41 };
-        ws.getCell(r, totalCol).font = { name: 'Calibri', size: 10, bold: r === 41 };
+        ws.getCell(r, priceCol).font = { name: 'Calibri', size: 10, bold: r === 40 };
+        ws.getCell(r, totalCol).font = { name: 'Calibri', size: 10, bold: r === 40 };
       });
     } else if (isPO) {
       ws.getCell(38, priceCol).value = 'TOTAL PO COST';
@@ -1120,9 +1133,18 @@ export async function exportJobTemplateXlsx(
     }
   }
 
-  // --- SHEET 9: CONTROLS (Fixed 9-name list with Pharmecore + Server path settings) ---
+  // --- SHEET 9: CONTROLS (End Users + Server Paths + Lossless Job Metadata & Custom Column Layout) ---
   const wsCtrl = wb.addWorksheet('CONTROLS', { views: [{ showGridLines: true }] });
-  wsCtrl.columns = [{ width: 38 }, { width: 4 }, { width: 24 }, { width: 44 }];
+  wsCtrl.columns = [
+    { width: 38 },
+    { width: 4 },
+    { width: 26 },
+    { width: 46 },
+    { width: 4 },
+    { width: 22 },
+    { width: 22 },
+    { width: 18 },
+  ];
   wsCtrl.getCell('A1').value = `END USERS (${company.endUsers.length}-ITEM LIST)`;
   wsCtrl.getCell('A1').font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.headerFont } };
   wsCtrl.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
@@ -1143,6 +1165,49 @@ export async function exportJobTemplateXlsx(
   wsCtrl.getCell('D3').value = '\\\\Server\\Procurement\\Issued\\';
   wsCtrl.getCell('C4').value = 'Style Variant';
   wsCtrl.getCell('D4').value = theme.name;
+
+  if (includeCurrentData) {
+    const metaRows: [string, string | number][] = [
+      ['meta_jobName', job.jobName],
+      ['meta_endUserContact', job.controls.endUserContact],
+      ['meta_endUserAddress', job.controls.endUserAddress],
+      ['meta_rfqRef', job.controls.rfqRef],
+      ['meta_customerPoRef', job.controls.customerPoRef],
+      ['meta_paymentTerms', job.controls.paymentTerms],
+      ['meta_deliveryLeadTime', job.controls.deliveryLeadTime],
+      ['meta_supplierName', job.controls.supplierName],
+      ['meta_supplierAddress', job.controls.supplierAddress],
+      ['meta_supplierRef', job.controls.supplierRef],
+      ['meta_shipDate', job.controls.shipDate],
+      ['meta_portOfLoading', job.controls.portOfLoading],
+      ['meta_deliveryDate', job.controls.deliveryDate],
+      ['meta_transportRef', job.controls.transportRef],
+      ['meta_receivedBy', job.controls.receivedBy],
+      ['meta_remarks', job.controls.remarks],
+      ['meta_authorizedSignatory', job.controls.authorizedSignatory],
+      ['meta_counterpartySignatory', job.controls.counterpartySignatory],
+      ['meta_includeVat', job.controls.includeVat !== false ? 'true' : 'false'],
+      ['meta_vatRate', job.controls.vatRate],
+    ];
+    metaRows.forEach(([k, v], idx) => {
+      wsCtrl.getCell(6 + idx, 3).value = k;
+      wsCtrl.getCell(6 + idx, 4).value = v;
+    });
+  }
+
+  // Persist Custom Column layout (ID, Label, Position) so re-import restores exact positions
+  wsCtrl.getCell('F1').value = 'CUSTOM_COL_ID';
+  wsCtrl.getCell('G1').value = 'CUSTOM_COL_LABEL';
+  wsCtrl.getCell('H1').value = 'CUSTOM_COL_POSITION';
+  ['F1', 'G1', 'H1'].forEach((ref) => {
+    wsCtrl.getCell(ref).font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.excel.headerFont } };
+    wsCtrl.getCell(ref).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+  });
+  templateCustomCols.forEach((cc, idx) => {
+    wsCtrl.getCell(2 + idx, 6).value = cc.id;
+    wsCtrl.getCell(2 + idx, 7).value = cc.label;
+    wsCtrl.getCell(2 + idx, 8).value = cc.position || 'after_no';
+  });
 
   const buffer = await wb.xlsx.writeBuffer();
   const filename = includeCurrentData
@@ -1294,7 +1359,10 @@ export type WorkbookImportResult =
   | { kind: 'job'; job: ProcurementJob; itemCount: number }
   | { kind: 'supplier_quote'; quote: ParsedSupplierQuote };
 
-export async function importWorkbookFromXlsx(file: File): Promise<WorkbookImportResult> {
+export async function importWorkbookFromXlsx(
+  file: File,
+  knownEndUsers: string[] = END_USER_OPTIONS
+): Promise<WorkbookImportResult> {
   const buffer = await file.arrayBuffer();
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer);
@@ -1331,10 +1399,11 @@ export async function importWorkbookFromXlsx(file: File): Promise<WorkbookImport
     }
   }
 
-  // 2. If this workbook is NOT a Grand Group template, parse it as an any-format Supplier Quote!
+  // 2. If this workbook is NOT a Grand Group template, parse it as an any-format Supplier Quote
   const wsPI = wb.getWorksheet('PROFORMA INVOICE');
   const wsPC = wb.getWorksheet('PRICE CALC');
   const wsPL = wb.getWorksheet('PACKING LIST');
+  const wsCtrl = wb.getWorksheet('CONTROLS');
 
   if (!wsPI && !wsPC) {
     const quote = parseGenericSupplierXlsx(wb, file.name);
@@ -1345,11 +1414,79 @@ export async function importWorkbookFromXlsx(file: File): Promise<WorkbookImport
   const cleanName = file.name.replace(/\.xlsx?$/i, '').replace(/[_-]+/g, ' ');
   const job = createBlankJob(cleanName);
 
+  // Read lossless metadata and custom column definitions from CONTROLS sheet if present
+  const validPositions: CustomColumnPosition[] = [
+    'after_no',
+    'after_requested',
+    'after_offered',
+    'after_qty',
+    'end',
+  ];
+  const ctrlColLayout = new Map<string, { id: string; position: CustomColumnPosition }>();
+  let hasMetaIncludeVat = false;
+
+  if (wsCtrl) {
+    const metaMap = new Map<string, ExcelJS.CellValue>();
+    for (let r = 6; r <= 30; r++) {
+      const key = cellToString(wsCtrl.getCell(r, 3).value);
+      if (key.startsWith('meta_')) {
+        metaMap.set(key, wsCtrl.getCell(r, 4).value);
+      }
+    }
+    const getStr = (k: string) =>
+      metaMap.has(k) ? cellToString(metaMap.get(k) ?? null) : undefined;
+
+    const mJobName = getStr('meta_jobName');
+    if (mJobName) job.jobName = mJobName;
+    if (metaMap.has('meta_endUserContact')) job.controls.endUserContact = getStr('meta_endUserContact') ?? '';
+    if (metaMap.has('meta_endUserAddress')) job.controls.endUserAddress = getStr('meta_endUserAddress') ?? '';
+    if (metaMap.has('meta_rfqRef')) job.controls.rfqRef = getStr('meta_rfqRef') ?? '';
+    if (metaMap.has('meta_customerPoRef')) job.controls.customerPoRef = getStr('meta_customerPoRef') ?? '';
+    if (metaMap.has('meta_paymentTerms')) job.controls.paymentTerms = getStr('meta_paymentTerms') ?? '';
+    if (metaMap.has('meta_deliveryLeadTime')) job.controls.deliveryLeadTime = getStr('meta_deliveryLeadTime') ?? '';
+    if (metaMap.has('meta_supplierName')) job.controls.supplierName = getStr('meta_supplierName') ?? '';
+    if (metaMap.has('meta_supplierAddress')) job.controls.supplierAddress = getStr('meta_supplierAddress') ?? '';
+    if (metaMap.has('meta_supplierRef')) job.controls.supplierRef = getStr('meta_supplierRef') ?? '';
+    if (metaMap.has('meta_shipDate')) job.controls.shipDate = getStr('meta_shipDate') ?? '';
+    if (metaMap.has('meta_portOfLoading')) job.controls.portOfLoading = getStr('meta_portOfLoading') ?? '';
+    if (metaMap.has('meta_deliveryDate')) job.controls.deliveryDate = getStr('meta_deliveryDate') ?? '';
+    if (metaMap.has('meta_transportRef')) job.controls.transportRef = getStr('meta_transportRef') ?? '';
+    if (metaMap.has('meta_receivedBy')) job.controls.receivedBy = getStr('meta_receivedBy') ?? '';
+    if (metaMap.has('meta_remarks')) job.controls.remarks = getStr('meta_remarks') ?? '';
+    if (metaMap.has('meta_authorizedSignatory')) {
+      job.controls.authorizedSignatory = getStr('meta_authorizedSignatory') ?? '';
+    }
+    if (metaMap.has('meta_counterpartySignatory')) {
+      job.controls.counterpartySignatory = getStr('meta_counterpartySignatory') ?? '';
+    }
+    if (metaMap.has('meta_includeVat')) {
+      hasMetaIncludeVat = true;
+      job.controls.includeVat = getStr('meta_includeVat')?.toLowerCase() !== 'false';
+    }
+    if (metaMap.has('meta_vatRate')) {
+      const mv = cellToNumber(metaMap.get('meta_vatRate') ?? null);
+      if (mv !== null && mv >= 0 && mv <= 1) {
+        job.controls.vatRate = mv;
+      }
+    }
+
+    for (let r = 2; r <= 5; r++) {
+      const colId = cellToString(wsCtrl.getCell(r, 6).value);
+      const colLabel = cellToString(wsCtrl.getCell(r, 7).value);
+      const colPos = cellToString(wsCtrl.getCell(r, 8).value) as CustomColumnPosition;
+      if (colLabel) {
+        ctrlColLayout.set(colLabel.toLowerCase(), {
+          id: colId || `col_${colLabel.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_${r}`,
+          position: validPositions.includes(colPos) ? colPos : 'after_no',
+        });
+      }
+    }
+  }
+
   if (wsPI) {
-    // Try standard Grand Group template cells first
     const toVal = cellToString(wsPI.getCell('C8').value);
     if (toVal) {
-      if (END_USER_OPTIONS.includes(toVal)) {
+      if (knownEndUsers.includes(toVal) || END_USER_OPTIONS.includes(toVal)) {
         job.controls.endUserSelect = toVal;
       } else {
         job.controls.endUserSelect = 'OTHER';
@@ -1360,15 +1497,38 @@ export async function importWorkbookFromXlsx(file: File): Promise<WorkbookImport
     if (customName && job.controls.endUserSelect === 'OTHER') {
       job.controls.customEndUser = customName;
     }
+    const rfqVal = cellToString(wsPI.getCell('C10').value);
+    if (rfqVal && !job.controls.rfqRef) job.controls.rfqRef = rfqVal;
+    const poVal = cellToString(wsPI.getCell('C11').value);
+    if (poVal && !job.controls.customerPoRef) job.controls.customerPoRef = poVal;
 
-    const curr = cellToString(wsPI.getCell('L3').value);
-    if (curr) job.controls.currency = curr;
-    const inco = cellToString(wsPI.getCell('L4').value);
-    if (inco) job.controls.incoterm = inco;
-    const vat = cellToNumber(wsPI.getCell('L5').value);
-    if (vat !== null && vat >= 0 && vat <= 1) job.controls.vatRate = vat;
-    const dest = cellToString(wsPI.getCell('L6').value);
-    if (dest) job.controls.destination = dest;
+    // Read K3:L7 controls dynamically by label (handles both current VAT-free PI and legacy v1 PI!L5 VAT)
+    for (let r = 3; r <= 7; r++) {
+      const lbl = cellToString(wsPI.getCell(r, 11).value).toLowerCase();
+      const valCell = wsPI.getCell(r, 12).value;
+      if (lbl.includes('currency')) {
+        const curr = cellToString(valCell);
+        if (curr) job.controls.currency = curr;
+      } else if (lbl.includes('incoterm')) {
+        const inco = cellToString(valCell);
+        if (inco) job.controls.incoterm = inco;
+      } else if (lbl.includes('vat')) {
+        const vat = cellToNumber(valCell);
+        if (vat !== null && vat >= 0 && vat <= 1 && !hasMetaIncludeVat) {
+          job.controls.vatRate = vat;
+          job.controls.includeVat = vat > 0;
+        }
+      } else if (lbl.includes('destination')) {
+        const dest = cellToString(valCell);
+        if (dest) job.controls.destination = dest;
+      } else if (lbl.includes('payment')) {
+        const pay = cellToString(valCell);
+        if (pay && !job.controls.paymentTerms) job.controls.paymentTerms = pay;
+      } else if (lbl.includes('lead')) {
+        const lead = cellToString(valCell);
+        if (lead && !job.controls.deliveryLeadTime) job.controls.deliveryLeadTime = lead;
+      }
+    }
 
     // Parse rows 17..36 (standard template rows)
     let foundRows = 0;
@@ -1391,15 +1551,30 @@ export async function importWorkbookFromXlsx(file: File): Promise<WorkbookImport
       }
     }
 
-    // Fallback: if workbook is an issued values-only export (items start at row 12)
+    // Fallback: if workbook is an issued values-only export (headers on row 11, items start at row 12)
     if (foundRows === 0) {
+      let reqCol = 3;
+      let offCol = 4;
+      let uomCol = 5;
+      let qtyCol = 6;
+      let priceCol = 7;
+      const totalCols = Math.min(20, wsPI.columnCount || 15);
+      for (let c = 2; c <= totalCols; c++) {
+        const h = cellToString(wsPI.getCell(11, c).value).toLowerCase();
+        if (h.includes('requested')) reqCol = c;
+        else if (h.includes('offered')) offCol = c;
+        else if (h === 'uom' || h.includes('unit of')) uomCol = c;
+        else if (h === 'qty' || h.includes('quantity')) qtyCol = c;
+        else if (h.includes('unit price') || h.includes('unit cost')) priceCol = c;
+      }
+
       for (let i = 0; i < 20; i++) {
         const r = 12 + i;
-        const reqDesc = cellToString(wsPI.getCell(r, 3).value);
-        const offDesc = cellToString(wsPI.getCell(r, 4).value);
-        const uom = cellToString(wsPI.getCell(r, 5).value);
-        const qty = cellToNumber(wsPI.getCell(r, 6).value);
-        const price = cellToNumber(wsPI.getCell(r, 7).value);
+        const reqDesc = cellToString(wsPI.getCell(r, reqCol).value);
+        const offDesc = cellToString(wsPI.getCell(r, offCol).value);
+        const uom = cellToString(wsPI.getCell(r, uomCol).value);
+        const qty = cellToNumber(wsPI.getCell(r, qtyCol).value);
+        const price = cellToNumber(wsPI.getCell(r, priceCol).value);
         if ((reqDesc || offDesc) && qty !== null && qty > 0) {
           foundRows += 1;
           job.items[i] = {
@@ -1408,18 +1583,22 @@ export async function importWorkbookFromXlsx(file: File): Promise<WorkbookImport
             offeredDescription: offDesc || reqDesc,
             uom: uom || 'PCS',
             qty,
-            supplierUnitCost: price !== null ? Number((price / 1.15).toFixed(2)) : null,
+            supplierUnitCost: price !== null ? Number((price / 1.2).toFixed(2)) : null,
           };
         }
       }
     }
-    // Read any custom columns stored in Col N+ (colNum 14..17) on template PI
+
+    // Read any custom columns stored in Col N+ (colNum 14..17) on template PI, restoring exact positions from CONTROLS
     const importedCustomCols: CustomColumnDef[] = [];
     for (let cNum = 14; cNum <= 17; cNum++) {
       const hdr = cellToString(wsPI.getCell(16, cNum).value);
       if (hdr) {
-        const id = `col_${hdr.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_${cNum}`;
-        importedCustomCols.push({ id, label: hdr, position: 'after_no' });
+        const savedMeta = ctrlColLayout.get(hdr.toLowerCase());
+        const id =
+          savedMeta?.id || `col_${hdr.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_${cNum}`;
+        const position: CustomColumnPosition = savedMeta?.position || 'after_no';
+        importedCustomCols.push({ id, label: hdr, position });
         for (let i = 0; i < 20; i++) {
           const val = cellToString(wsPI.getCell(17 + i, cNum).value);
           if (val) {
@@ -1441,10 +1620,21 @@ export async function importWorkbookFromXlsx(file: File): Promise<WorkbookImport
     if (e3 !== null && e3 >= 0 && e3 <= 5) {
       job.freight.selectedMarkupPct = e3;
     }
+    // Read internal VAT from PRICE CALC!E4 (if present)
+    const e4 = cellToNumber(wsPC.getCell('E4').value);
+    if (e4 !== null && e4 >= 0 && e4 <= 1) {
+      if (e4 > 0) {
+        job.controls.includeVat = true;
+        job.controls.vatRate = e4;
+      } else {
+        job.controls.includeVat = false;
+      }
+    }
+
     const rateCbm = cellToNumber(wsPC.getCell('I3').value);
-    if (rateCbm !== null) job.freight.ratePerCbm = rateCbm;
+    if (rateCbm !== null && rateCbm >= 0) job.freight.ratePerCbm = rateCbm;
     const rateKg = cellToNumber(wsPC.getCell('L3').value);
-    if (rateKg !== null) job.freight.ratePerKg = rateKg;
+    if (rateKg !== null && rateKg >= 0) job.freight.ratePerKg = rateKg;
     const docPct = cellToNumber(wsPC.getCell('O3').value);
     if (docPct !== null && docPct >= 0 && docPct <= 1) job.freight.docChargePct = docPct;
 
@@ -1458,12 +1648,12 @@ export async function importWorkbookFromXlsx(file: File): Promise<WorkbookImport
       const kg = cellToNumber(wsPC.getCell(r, 12).value);
 
       const updates: Partial<JobItemRow> = {};
-      if (cost !== null) updates.supplierUnitCost = cost;
-      if (boxes !== null) updates.boxes = boxes;
-      if (l !== null) updates.boxLengthCm = l;
-      if (w !== null) updates.boxWidthCm = w;
-      if (h !== null) updates.boxHeightCm = h;
-      if (kg !== null) updates.kgPerBox = kg;
+      if (cost !== null && cost >= 0) updates.supplierUnitCost = cost;
+      if (boxes !== null && boxes >= 0) updates.boxes = boxes;
+      if (l !== null && l >= 0) updates.boxLengthCm = l;
+      if (w !== null && w >= 0) updates.boxWidthCm = w;
+      if (h !== null && h >= 0) updates.boxHeightCm = h;
+      if (kg !== null && kg >= 0) updates.kgPerBox = kg;
       if (Object.keys(updates).length > 0) {
         job.items[i] = { ...job.items[i], ...updates };
       }
@@ -1471,17 +1661,29 @@ export async function importWorkbookFromXlsx(file: File): Promise<WorkbookImport
   }
 
   if (wsPL) {
+    // Locate Carton No., Net Wt, Gross Wt dynamically by Row 16 headers (resilient to custom column shifts!)
+    let cartonCol = 7;
+    let netCol = 8;
+    let grossCol = 9;
+    const plMaxCols = Math.min(20, wsPL.columnCount || 15);
+    for (let c = 2; c <= plMaxCols; c++) {
+      const h = cellToString(wsPL.getCell(16, c).value).toLowerCase();
+      if (h.includes('carton')) cartonCol = c;
+      else if (h.includes('net wt') || h.includes('net weight')) netCol = c;
+      else if (h.includes('gross wt') || h.includes('gross weight')) grossCol = c;
+    }
+
     for (let i = 0; i < 20; i++) {
       const r = 17 + i;
-      const carton = cellToString(wsPL.getCell(r, 7).value);
-      const net = cellToNumber(wsPL.getCell(r, 8).value);
-      const gross = cellToNumber(wsPL.getCell(r, 9).value);
+      const carton = cellToString(wsPL.getCell(r, cartonCol).value);
+      const net = cellToNumber(wsPL.getCell(r, netCol).value);
+      const gross = cellToNumber(wsPL.getCell(r, grossCol).value);
       if (carton || net !== null || gross !== null) {
         job.items[i] = {
           ...job.items[i],
           cartonNo: carton,
-          netWtKg: net,
-          grossWtKg: gross,
+          netWtKg: net !== null && net >= 0 ? net : null,
+          grossWtKg: gross !== null && gross >= 0 ? gross : null,
         };
       }
     }

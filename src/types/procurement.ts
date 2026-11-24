@@ -103,15 +103,15 @@ export interface FreightConfig {
 }
 
 export interface JobControls {
-  endUserSelect: string; // Dropdown from 9 confirmed end users
+  endUserSelect: string; // Dropdown from configured end users
   customEndUser: string; // Used when endUserSelect === 'OTHER'
   endUserContact: string;
   endUserAddress: string;
   currency: string;
   incoterm: string;
   destination: string;
-  vatRate: number; // PI!L5 default 0.05 (5%), 0 for zero-rated
-  quoteValidityDays: number;
+  includeVat: boolean; // Internal PRICE CALC toggle: when true, VAT is folded into customer Unit Price
+  vatRate: number; // Internal PRICE CALC VAT rate (default 0.05 = 5%, hidden from end-user docs)
   paymentTerms: string;
   deliveryLeadTime: string;
   rfqRef: string;
@@ -181,6 +181,15 @@ export interface ValidationIssue {
   message: string;
 }
 
+export interface ConfirmDialogRequest {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  destructive?: boolean;
+  onConfirm: () => void;
+}
+
 export interface ComputedRow {
   rowNumber: number;
   index: number; // 1..20
@@ -192,12 +201,12 @@ export interface ComputedRow {
   qty: number | null;
   supplierUnitCost: number | null;
   supplierTotalCost: number | null;
-  // Side-by-side markup scenarios (cost * (1 + %))
+  // Side-by-side markup scenarios: cost * (1 + markup) * (1 + effectiveVat)
   unitPrice10: number | null;
   unitPrice15: number | null;
   unitPrice18: number | null;
   unitPrice20: number | null;
-  // Active markup unit price (PRICE CALC col R -> PI Unit Price)
+  // Active markup unit price (PRICE CALC col R -> PI Unit Price, includes internal VAT when enabled)
   activeUnitPrice: number | null;
   activeTotalPrice: number | null;
   // Logistics
@@ -226,20 +235,23 @@ export interface JobCalculationSummary {
   docChargeAmount: number;
   freightWithDoc: number;
   freightMarkupAmount: number;
-  customerFreight: number; // Separate line after VAT
-  // Customer totals (QT / PI / CI)
-  goodsSubtotal: number;
-  vatAmount: number; // Applied to goods subtotal ONLY
-  grandTotal: number; // SUBTOTAL + VAT + FREIGHT
+  customerFreight: number; // Separate line after Goods Subtotal
+  // Internal VAT & Customer totals (QT / PI / CI never display a VAT line)
+  effectiveVatRate: number; // 0 when includeVat is false, otherwise vatRate
+  goodsSubtotalExVat: number; // Internal goods total before embedded VAT
+  vatAmount: number; // Embedded internal VAT inside Unit Prices (for internal accounting only)
+  goodsSubtotal: number; // Customer Goods Subtotal (sum of VAT-inclusive line totals)
+  grandTotal: number; // Customer Goods Subtotal + Customer Freight
   // Profit & scenario comparisons
   scenarioTotals: Record<MarkupRate, {
+    goodsSubtotalExVat: number;
     goodsSubtotal: number;
     vatAmount: number;
     customerFreight: number;
     grandTotal: number;
     grossProfit: number;
   }>;
-  grossProfit: number;
+  grossProfit: number; // Excludes embedded VAT pass-through
   // Packing list / DN totals
   plTotalNetWt: number;
   plTotalGrossWt: number;

@@ -1,13 +1,14 @@
 import React from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { EXCEL_THEMES, UOM_OPTIONS } from '../constants/themes';
+import { EXCEL_THEMES, MARKUP_RATES, UOM_OPTIONS } from '../constants/themes';
 import {
   ComputedRow,
+  ConfirmDialogRequest,
   CustomColumnDef,
   JobItemRow,
   ThemeVariantId,
 } from '../types/procurement';
-import { formatMoney, formatNumber } from '../utils/calculations';
+import { formatMoney, formatNumber, formatPct } from '../utils/calculations';
 
 interface IPadJobEditorProps {
   mode: 'entry' | 'costing' | 'logistics';
@@ -16,8 +17,11 @@ interface IPadJobEditorProps {
   customColumns?: CustomColumnDef[];
   currency: string;
   themeId: ThemeVariantId;
+  activeMarkupPct?: number;
+  effectiveVatRate?: number;
   disabled?: boolean;
   onUpdateItem: (rowNumber: number, patch: Partial<JobItemRow>) => void;
+  onRequestConfirm?: (req: ConfirmDialogRequest) => void;
 }
 
 function parseOptionalNumber(val: string): number | null {
@@ -33,10 +37,14 @@ export const IPadJobEditor: React.FC<IPadJobEditorProps> = ({
   customColumns = [],
   currency,
   themeId,
+  activeMarkupPct = 0.2,
+  effectiveVatRate = 0.05,
   disabled = false,
   onUpdateItem,
+  onRequestConfirm,
 }) => {
   const theme = EXCEL_THEMES[themeId];
+  const isCustomMarkup = !MARKUP_RATES.some((r) => Math.abs(r - activeMarkupPct) < 0.0001);
 
   // Show all populated rows (or first row if none populated yet) so iPad users never scroll through 16 blank rows
   const populatedIndices = computedRows
@@ -59,8 +67,7 @@ export const IPadJobEditor: React.FC<IPadJobEditorProps> = ({
     });
   };
 
-  const handleClearRow = (rowNumber: number) => {
-    if (disabled) return;
+  const clearRowNow = (rowNumber: number) => {
     onUpdateItem(rowNumber, {
       requestedDescription: '',
       offeredDescription: '',
@@ -77,6 +84,21 @@ export const IPadJobEditor: React.FC<IPadJobEditorProps> = ({
       netWtKg: null,
       grossWtKg: null,
     });
+  };
+
+  const handleClearRow = (rowNumber: number, itemLabel: string) => {
+    if (disabled) return;
+    if (onRequestConfirm) {
+      onRequestConfirm({
+        title: `Clear Row ${rowNumber}?`,
+        message: `This will clear "${itemLabel || `Row ${rowNumber}`}" along with its cost, boxes, and packing weights.`,
+        confirmLabel: 'Clear Row',
+        destructive: true,
+        onConfirm: () => clearRowNow(rowNumber),
+      });
+    } else {
+      clearRowNow(rowNumber);
+    }
   };
 
   return (
@@ -108,13 +130,18 @@ export const IPadJobEditor: React.FC<IPadJobEditorProps> = ({
                 )}
                 {mode === 'costing' && calcRow.activeUnitPrice !== null && (
                   <span className="text-sm font-bold font-mono-tabular" style={{ color: theme.primary }}>
-                    Col R: {formatMoney(calcRow.activeUnitPrice, currency)}
+                    Col R ({formatPct(activeMarkupPct)}{effectiveVatRate > 0 ? ` + ${formatPct(effectiveVatRate)} VAT` : ''}): {formatMoney(calcRow.activeUnitPrice, currency)}
                   </span>
                 )}
                 {mode === 'entry' && !disabled && !calcRow.isEmpty && (
                   <button
                     type="button"
-                    onClick={() => handleClearRow(raw.rowNumber)}
+                    onClick={() =>
+                      handleClearRow(
+                        raw.rowNumber,
+                        raw.offeredDescription || raw.requestedDescription
+                      )
+                    }
                     className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 min-h-[40px] min-w-[40px] flex items-center justify-center cursor-pointer"
                     aria-label={`Clear row ${raw.rowNumber}`}
                   >
@@ -352,8 +379,12 @@ export const IPadJobEditor: React.FC<IPadJobEditorProps> = ({
                     <span className="text-slate-700">{formatMoney(calcRow.unitPrice18) || '—'}</span>
                   </div>
                   <div>
-                    <span className="text-slate-400 block">20%</span>
-                    <span className="text-slate-700">{formatMoney(calcRow.unitPrice20) || '—'}</span>
+                    <span className="text-slate-400 block">
+                      {isCustomMarkup ? `Custom ${formatPct(activeMarkupPct)}` : '20%'}
+                    </span>
+                    <span className={isCustomMarkup ? 'font-bold text-slate-900' : 'text-slate-700'}>
+                      {formatMoney(isCustomMarkup ? calcRow.activeUnitPrice : calcRow.unitPrice20) || '—'}
+                    </span>
                   </div>
                 </div>
               </div>

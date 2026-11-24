@@ -183,7 +183,28 @@ export default defineConfig({
               const publicDir = path.resolve(import.meta.dirname, 'public');
               fs.mkdirSync(publicDir, { recursive: true });
 
-              // 1) Windows single double-clickable .html
+              // Load separate Tutorial/ attachments from tutorial-attachments/ (outside public/)
+              const tutorialDir = path.resolve(import.meta.dirname, 'tutorial-attachments');
+              const tutorialFiles = [
+                'Grand_Group_Procurement_NotebookLM_Tutorial_Guide.pdf',
+                'Grand_Group_Procurement_Demo_Walkthrough.webm',
+                'Grand_Group_Procurement_NotebookLM_Guide.md',
+              ];
+              const readTutorialEntries = (prefix: string): ZipEntry[] => {
+                const entries: ZipEntry[] = [];
+                for (const fileName of tutorialFiles) {
+                  const fullPath = path.join(tutorialDir, fileName);
+                  if (fs.existsSync(fullPath)) {
+                    entries.push({
+                      name: `${prefix}${fileName}`,
+                      data: fs.readFileSync(fullPath),
+                    });
+                  }
+                }
+                return entries;
+              };
+
+              // 1) Windows offline .zip (clean double-clickable .html + separate Tutorial/ folder)
               const windowsHtml =
                 html.slice(0, bodyEnd) +
                 '<script>window.__GG_DEFAULT_PLATFORM__="windows";</script>' +
@@ -192,9 +213,17 @@ export default defineConfig({
                 '</script>' +
                 html.slice(bodyEnd);
 
-              fs.writeFileSync(path.join(publicDir, 'offline-windows.dat'), windowsHtml, 'utf8');
+              const windowsZipBuffer = createStoredZip([
+                {
+                  name: 'Grand_Group_FZC_Windows_Offline/Grand_Group_FZC_Windows_Offline.html',
+                  data: Buffer.from(windowsHtml, 'utf8'),
+                },
+                ...readTutorialEntries('Grand_Group_FZC_Windows_Offline/Tutorial/'),
+              ]);
 
-              // 2) iPad / iOS complete offline PWA folder packaged in a .zip
+              fs.writeFileSync(path.join(publicDir, 'offline-windows.dat'), windowsZipBuffer);
+
+              // 2) iPad / iOS complete offline PWA folder + separate Tutorial/ folder packaged in a .zip
               const ipadHeadInject =
                 '<link rel="manifest" href="./manifest.json" />' +
                 '<link rel="apple-touch-icon" href="./apple-touch-icon.png" />' +
@@ -221,7 +250,7 @@ export default defineConfig({
               const logoPath = path.resolve(import.meta.dirname, 'src/assets/grand-group-logo.png');
               const iconBuf = fs.readFileSync(logoPath);
 
-              const zipBuffer = createStoredZip([
+              const ipadZipBuffer = createStoredZip([
                 { name: 'Grand_Group_iPad_App/index.html', data: Buffer.from(ipadHtml, 'utf8') },
                 { name: 'Grand_Group_iPad_App/sw.js', data: Buffer.from(IPAD_SW_JS, 'utf8') },
                 {
@@ -229,9 +258,10 @@ export default defineConfig({
                   data: Buffer.from(IPAD_MANIFEST_JSON, 'utf8'),
                 },
                 { name: 'Grand_Group_iPad_App/apple-touch-icon.png', data: iconBuf },
+                ...readTutorialEntries('Tutorial/'),
               ]);
 
-              fs.writeFileSync(path.join(publicDir, 'offline-ipad.dat'), zipBuffer);
+              fs.writeFileSync(path.join(publicDir, 'offline-ipad.dat'), ipadZipBuffer);
             }
           }
           fs.rmSync(path.resolve(import.meta.dirname, 'dist-offline'), {

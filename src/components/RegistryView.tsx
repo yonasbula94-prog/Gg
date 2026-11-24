@@ -29,6 +29,7 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ISSUED' | 'VOID'>('ALL');
   const [voidingSeq, setVoidingSeq] = useState<number | null>(null);
   const [voidReason, setVoidReason] = useState('');
+  const [exporting, setExporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const theme = EXCEL_THEMES[themeId];
@@ -53,8 +54,15 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
   const voidCount = entries.filter((e) => e.status === 'VOID').length;
 
   const handleExportRegistry = async () => {
-    const filename = await exportMasterRegistryXlsx(entries, themeId, company);
-    onNotify(`Exported ${filename} (${entries.length} records)`);
+    setExporting(true);
+    try {
+      const filename = await exportMasterRegistryXlsx(entries, themeId, company);
+      onNotify(`Exported ${filename} (${entries.length} records)`);
+    } catch {
+      onNotify('Failed to export Master_Registry.xlsx. Please try again.');
+    } finally {
+      setExporting(false);
+    }
   };
 
   const handleImportRegistry = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -179,12 +187,13 @@ export const RegistryView: React.FC<RegistryViewProps> = ({
           </button>
           <button
             type="button"
+            disabled={exporting}
             onClick={handleExportRegistry}
-            className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold text-white hover:opacity-90 cursor-pointer min-h-[40px] whitespace-nowrap"
+            className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold text-white hover:opacity-90 cursor-pointer min-h-[40px] whitespace-nowrap disabled:opacity-50"
             style={{ backgroundColor: theme.primary }}
           >
             <FileSpreadsheet className="w-3.5 h-3.5" />
-            <span>Export Master_Registry.xlsx</span>
+            <span>{exporting ? 'Exporting...' : 'Export Master_Registry.xlsx'}</span>
           </button>
         </div>
       </div>
