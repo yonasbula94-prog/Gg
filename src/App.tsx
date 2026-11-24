@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { CircleHelp, Redo2, Send, Undo2 } from 'lucide-react';
 import { SupplierRfqView } from './components/SupplierRfqView';
+import { applyPageSnapshot, undoPageKey } from './utils/pageUndo';
 import { HelpView } from './components/HelpView';
 import { helpTopicForTab } from './constants/helpTopics';
 import { DOC_META, pageBarColor, resolveThemePalette } from './constants/themes';
@@ -223,13 +224,15 @@ export default function App() {
   const UNDO_COALESCE_MS = 1500;
   const undoHistoryRef = useRef<Record<string, { past: ProcurementJob[]; future: ProcurementJob[]; lastEditAt: number }>>({});
   const [, setHistoryVersion] = useState(0);
-  const historyFor = (jobId: string) => {
-    if (!undoHistoryRef.current[jobId]) undoHistoryRef.current[jobId] = { past: [], future: [], lastEditAt: 0 };
-    return undoHistoryRef.current[jobId];
+  const historyFor = (key: string) => {
+    if (!undoHistoryRef.current[key]) undoHistoryRef.current[key] = { past: [], future: [], lastEditAt: 0 };
+    return undoHistoryRef.current[key];
   };
 
+  const currentUndoKey = () => `${activeJob.id}|${undoPageKey(activeTab)}`;
+
   const mutateSystemJob = (updater: (job: ProcurementJob) => ProcurementJob) => {
-    const h = historyFor(activeJob.id);
+    const h = historyFor(currentUndoKey());
     const now = Date.now();
     if (now - h.lastEditAt > UNDO_COALESCE_MS) {
       h.past.push(activeJob);
@@ -251,10 +254,11 @@ export default function App() {
 
   // Undo / redo restore the job's editable content. Issued-document records stay as they are.
   const restoreJobSnapshot = (snapshot: ProcurementJob) => {
+    const tab = activeTab;
     setJobs((prev) =>
       prev.map((j) =>
         j.id === activeJob.id
-          ? { ...snapshot, issuedDocs: j.issuedDocs, updatedAt: new Date().toISOString() }
+          ? { ...applyPageSnapshot(j, snapshot, tab), updatedAt: new Date().toISOString() }
           : j
       )
     );
@@ -262,7 +266,7 @@ export default function App() {
 
   const handleUndo = () => {
     if (isEditingLocked()) return showToast('Issued document is locked. Use Unlock on the document to make changes.');
-    const h = historyFor(activeJob.id);
+    const h = historyFor(currentUndoKey());
     const previous = h.past.pop();
     if (!previous) return showToast('Nothing to undo for this job.');
     h.future.push(activeJob);
@@ -273,7 +277,7 @@ export default function App() {
 
   const handleRedo = () => {
     if (isEditingLocked()) return showToast('Issued document is locked. Use Unlock on the document to make changes.');
-    const h = historyFor(activeJob.id);
+    const h = historyFor(currentUndoKey());
     const next = h.future.pop();
     if (!next) return showToast('Nothing to redo for this job.');
     h.past.push(activeJob);
@@ -1170,8 +1174,8 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleUndo}
-                disabled={historyFor(activeJob.id).past.length === 0}
-                title={`Undo (Ctrl+Z) · ${historyFor(activeJob.id).past.length} of ${UNDO_LIMIT} steps`}
+                disabled={historyFor(currentUndoKey()).past.length === 0}
+                title={`Undo (Ctrl+Z) · ${historyFor(currentUndoKey()).past.length} of ${UNDO_LIMIT} steps · this page`}
                 aria-label="Undo"
                 className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-40 cursor-pointer min-h-[40px]"
               >
@@ -1181,7 +1185,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleRedo}
-                disabled={historyFor(activeJob.id).future.length === 0}
+                disabled={historyFor(currentUndoKey()).future.length === 0}
                 title="Redo (Ctrl+Y)"
                 aria-label="Redo"
                 className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-40 cursor-pointer min-h-[40px]"

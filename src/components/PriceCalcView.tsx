@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useRowSelection } from '../hooks/useRowSelection';
 import { PasteIntoRows } from './PasteIntoRows';
+import { useCellRange } from '../hooks/useCellRange';
+import { parseFlexibleNumber as parseNumberForRange } from '../utils/supplierQuoteParser';
 import { RowCopyControls, pickFields } from './RowCopyControls';
 import { parseFlexibleNumber } from '../utils/supplierQuoteParser';
 import { ArrowRight, Building2, Lock } from 'lucide-react';
@@ -76,6 +78,29 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
   const [bulkCost, setBulkCost] = useState('');
   // Every row can be selected, including empty ones (so values can be applied before the description is entered)
   const selectableRows = calc.rows.map((r) => r.rowNumber);
+  // Free cell-range selection: table cell index -> editable item field
+  const priceFieldAt: Record<number, keyof JobItemRow> = {
+    4: 'boxes',
+    5: 'boxLengthCm',
+    6: 'boxWidthCm',
+    7: 'boxHeightCm',
+    9: 'kgPerBox',
+    11: 'supplierUnitCost',
+  };
+  const cellRange = useCellRange({
+    tableKey: 'price-calc',
+    rowOrder: calc.rows.map((r) => r.rowNumber),
+    fieldAt: (ci) => (priceFieldAt[ci] ? (priceFieldAt[ci] as string) : null),
+    readCell: (rn, field) => {
+      const item = job.items.find((i) => i.rowNumber === rn);
+      const v = item ? (item as unknown as Record<string, unknown>)[field] : null;
+      return v === null || v === undefined ? '' : String(v);
+    },
+    writeCell: (rn, field, text) => {
+      const n = parseNumberForRange(text);
+      guardItem(rn, { [field]: n } as Partial<JobItemRow>);
+    },
+  });
   const applyBulk = (patch: Partial<JobItemRow>) => {
     rowSel.selected.forEach((rn) => guardItem(rn, patch));
   };
@@ -558,7 +583,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
           )}
 
           <div className="overflow-x-auto sheet-scroll">
-            <table className="w-full border-collapse text-xs">
+            <table className="w-full border-collapse text-xs" data-range-table="price-calc">
               <thead>
                 <tr style={{ backgroundColor: theme.primary, color: theme.primaryText }}>
                   <th className="py-2.5 px-2 text-center w-8">
@@ -602,6 +627,15 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                     <tr
                       key={row.rowNumber}
                       onMouseEnter={() => rowSel.dragOver(row.rowNumber)}
+                      onMouseDown={(e) => {
+                        const td = (e.target as HTMLElement).closest('td');
+                        if (td) cellRange.onCellDown(row.rowNumber, td.cellIndex, e);
+                      }}
+                      onMouseOver={(e) => {
+                        const td = (e.target as HTMLElement).closest('td');
+                        if (td) cellRange.onCellOver(row.rowNumber, td.cellIndex);
+                      }}
+                      data-row-number={row.rowNumber}
                       className={`${isInactive ? 'opacity-50' : ''} hover:bg-slate-50/90 transition-colors`}
                       style={!isInactive && idx % 2 === 1 ? { backgroundColor: theme.zebraRow } : undefined}
                     >

@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import ExcelJS from 'exceljs';
-import { Printer, Upload } from 'lucide-react';
+import { FileSpreadsheet, Printer, Upload } from 'lucide-react';
+import { exportSupplierRfqXlsx } from '../utils/excelEngine';
 import { CompanyProfile, ProcurementJob, SupplierRfqData, ThemePalette } from '../types/procurement';
 import { ParsedQuoteItem, parseGenericSupplierXlsx, parseSupplierPdfFile } from '../utils/supplierQuoteParser';
 
@@ -144,6 +145,21 @@ export const SupplierRfqView: React.FC<SupplierRfqViewProps> = ({
             >
               <Printer className="w-3.5 h-3.5" />
               <span>Print / Save as PDF</span>
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const file = await exportSupplierRfqXlsx(job, theme, company);
+                  onNotify(`Downloaded ${file}`);
+                } catch {
+                  onNotify('Could not build the Supplier RFQ workbook.');
+                }
+              }}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-50 cursor-pointer min-h-[40px]"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Export Excel</span>
             </button>
           </div>
         </div>

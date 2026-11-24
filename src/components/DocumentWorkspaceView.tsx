@@ -56,6 +56,7 @@ import {
   validateForIssue,
 } from '../utils/calculations';
 import { exportIssuedDocumentXlsx } from '../utils/excelEngine';
+import { useCellRange } from '../hooks/useCellRange';
 import { HelpTip } from './HelpTip';
 import { IPadJobEditor } from './IPadJobEditor';
 import { useRowSelection } from '../hooks/useRowSelection';
@@ -180,6 +181,46 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
 
   // Unified ordered column keys for both Edit Schedule and A4 Print Preview
   const orderedColKeys = resolveDocumentColumns(job.columnOrder, customColumns, isLogistics);
+  // Free cell-range selection: columns map to job fields (cell index 2 = first document column)
+  const docFieldFor = (colKey: string | undefined): string | null => {
+    if (!colKey) return null;
+    if (colKey.startsWith('custom:')) return colKey;
+    const map: Record<string, string> = {
+      requested: 'requestedDescription',
+      offered: 'offeredDescription',
+      uom: 'uom',
+      qty: 'qty',
+      carton: 'cartonNo',
+      net_wt: 'netWtKg',
+      gross_wt: 'grossWtKg',
+    };
+    return map[colKey] ?? null;
+  };
+  const cellRange = useCellRange({
+    tableKey: `doc-${prefix}`,
+    rowOrder: calc.rows.map((r) => r.rowNumber),
+    fieldAt: (cellIndex) => docFieldFor(orderedColKeys[cellIndex - 2]),
+    readCell: (rn, field) => {
+      const item = job.items.find((i) => i.rowNumber === rn);
+      if (!item) return '';
+      if (field.startsWith('custom:')) return item.customFields?.[field.slice('custom:'.length)] ?? '';
+      const v = (item as unknown as Record<string, unknown>)[field];
+      return v === null || v === undefined ? '' : String(v);
+    },
+    writeCell: (rn, field, text) => {
+      if (field.startsWith('custom:')) {
+        const id = field.slice('custom:'.length);
+        const item = job.items.find((i) => i.rowNumber === rn);
+        onUpdateItem(rn, { customFields: { ...(item?.customFields || {}), [id]: text } });
+        return;
+      }
+      if (field === 'qty' || field === 'netWtKg' || field === 'grossWtKg') {
+        onUpdateItem(rn, { [field]: parseFlexibleNumber(text) } as Partial<JobItemRow>);
+        return;
+      }
+      onUpdateItem(rn, { [field]: text } as Partial<JobItemRow>);
+    },
+  });
   const defaultOrder = resolveDocumentColumns(undefined, customColumns, isLogistics);
   const hasCustomOrder =
     orderedColKeys.length === defaultOrder.length &&
@@ -1645,7 +1686,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
               )}
 
               <div className="overflow-x-auto sheet-scroll">
-                <table className="w-full border-collapse text-xs">
+                <table className="w-full border-collapse text-xs" data-range-table={`doc-${prefix}`}>
                   <thead>
                     <tr style={{ backgroundColor: theme.primary, color: theme.primaryText }}>
                       <th className="py-2.5 px-2 text-center w-8">
@@ -1928,6 +1969,15 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                           className="hover:bg-slate-50/90 transition-colors"
                           style={idx % 2 === 1 ? { backgroundColor: theme.zebraRow } : undefined}
                           onMouseEnter={() => rowSel.dragOver(row.rowNumber)}
+                          onMouseDown={(e) => {
+                            const td = (e.target as HTMLElement).closest('td');
+                            if (td) cellRange.onCellDown(row.rowNumber, td.cellIndex, e);
+                          }}
+                          onMouseOver={(e) => {
+                            const td = (e.target as HTMLElement).closest('td');
+                            if (td) cellRange.onCellOver(row.rowNumber, td.cellIndex);
+                          }}
+                          data-row-number={row.rowNumber}
                         >
                           <td
                             className="py-1.5 px-2 text-center select-none"

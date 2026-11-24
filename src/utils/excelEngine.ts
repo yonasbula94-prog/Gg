@@ -679,6 +679,17 @@ function renderTradeSheet(
         }
         return isPO ? staticCell(spec, calc.rows[i]) : piRef('H');
       }
+      case 'packages':
+      case 'carton':
+      case 'net_wt':
+      case 'gross_wt': {
+        if (prefix !== 'DN') return staticCell(spec, calc.rows[i]);
+        // Delivery note reads the shipment data from the packing list (linked, so edits there flow through)
+        const plRow = 17 + i; // packing list item rows 17-36 (fixed layout)
+        const hdr = `MATCH("${spec.header}",'PACKING LIST'!$A$16:$Z$16,0)`;
+        const val = `INDEX('PACKING LIST'!$A${plRow}:$Z${plRow},${hdr})`;
+        return { formula: `IFERROR(IF(${val}="","",${val}),"")` };
+      }
       default: {
         const id = spec.key.startsWith('custom:') ? spec.key.slice('custom:'.length) : '';
         const letter = id ? opts.piCustomLetter?.get(id) : undefined;
@@ -1450,8 +1461,9 @@ export async function exportJobTemplateXlsx(
         } else if (spec.key === 'qty') {
           cell.value = { formula: `IF('PROFORMA INVOICE'!F${r - 4}="","",'PROFORMA INVOICE'!F${r - 4})` };
         } else if (spec.key === 'packages') {
-          const plRow = includeCurrentData ? calculateJob(job).rows[i] : undefined;
-          cell.value = plRow && plRow.boxes ? `${plRow.boxes} pkg${plRow.boxDims ? ` · ${plRow.boxDims}` : ''}` : '';
+          // Linked to PRICE CALC: boxes (G) and L x W x H (H, I, J) entered there
+          const pc = r;
+          cell.value = { formula: `IF('PRICE CALC'!G${pc}="","",'PRICE CALC'!G${pc}&" pkg"&IF('PRICE CALC'!H${pc}="",""," · "&'PRICE CALC'!H${pc}&"×"&'PRICE CALC'!I${pc}&"×"&'PRICE CALC'!J${pc}))` };
         } else if (spec.key === 'carton') {
           cell.value = item ? item.cartonNo : '';
         } else if (spec.key === 'netWt') {
@@ -2677,6 +2689,118 @@ export async function exportAuditLogXlsx(
   ws.autoFilter = { from: 'A1', to: 'I1' };
   const buffer = await wb.xlsx.writeBuffer();
   const filename = `GG_Audit_Log_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  await triggerDownload(buffer as ArrayBuffer, filename);
+  return filename;
+}
+
+/**
+ * SUPPLIER RFQ (XLSX): the request sent to suppliers, built from the end-user RFQ items.
+ * Same banner and metadata layout as the other documents. Price and total columns are left blank for the supplier.
+ */
+export async function exportSupplierRfqXlsx(
+  job: ProcurementJob,
+  themeOrId: ThemeVariantId | ThemePalette,
+  company: CompanyProfile
+): Promise<string> {
+  const theme = resolveExcelTheme(themeOrId);
+  const fontName = theme.fontName || 'Calibri';
+  const rfq = job.supplierRfq;
+  const rfqNumber = rfq?.rfqNumber || (job.jobSequence ? `SRFQ-${String(job.jobSequence).padStart(3, '0')}` : '');
+  const currency = job.controls.currency || 'USD';
+  const items = job.items.filter((it) => it.requestedDescription || it.offeredDescription);
+  const endUser = job.controls.endUserSelect === 'OTHER' ? job.controls.customEndUser : job.controls.endUserSelect;
+
+  const cols = [
+    { header: 'No.', width: 8, align: 'center' as const },
+    { header: 'Description', width: 50, align: 'left' as const },
+    { header: 'UoM', width: 9, align: 'center' as const },
+    { header: 'Qty', width: 10, align: 'right' as const },
+    { header: `Unit price (${currency})`, width: 18, align: 'right' as const },
+    { header: `Total (${currency})`, width: 18, align: 'right' as const },
+  ];
+  const lastCol = cols.length + 1;
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = company.name;
+  wb.created = new Date();
+  const ws = wb.addWorksheet('SUPPLIER RFQ', {
+    views: [{ showGridLines: false }],
+    pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: PRINT_MARGINS },
+  });
+  ws.pageSetup.printTitlesRow = '11:11';
+  ws.columns = [{ width: 2 }, ...cols.map((c) => ({ width: c.width }))];
+  styleBannerHeader(wb, ws, theme, company, 'REQUEST FOR QUOTATION', rfqNumber, cols.length);
+  const ctx: TradeCtx = { ws, theme, fontName, lastCol };
+
+  const today = new Date().toISOString().slice(0, 10);
+  writeTradeMetaBlock(ctx, {
+    left: [
+      ['TO (SUPPLIER)', rfq?.supplierName || '—'],
+      ['ATTN / CONTACT', rfq?.supplierContact || '—'],
+      ['ADDRESS', rfq?.supplierAddress || '—'],
+      ['EMAIL', rfq?.supplierEmail || '—'],
+      ['CURRENCY', currency],
+    ],
+    right: [
+      ['DATE', today],
+      ['RFQ NO.', rfqNumber || '—'],
+      ['QUOTES DUE BY', rfq?.responseDueDate || '—'],
+      ['YOUR REFERENCE', job.controls.rfqRef || '—'],
+      ['DESTINATION', `${job.controls.incoterm} · ${job.controls.destination}`],
+    ],
+  });
+  if (rfq?.showEndUser && endUser) {
+    ws.getCell('B4').value = `End user: ${endUser}`;
+    ws.getCell('B4').font = { name: fontName, size: 9, italic: true, color: { argb: 'FF475569' } };
+  }
+
+  const header = ws.getRow(11);
+  header.height = 26;
+  cols.forEach((c, i) => {
+    const cell = header.getCell(i + 2);
+    cell.value = c.header;
+    cell.font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.headerFont } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+    cell.alignment = { vertical: 'middle', horizontal: c.align, wrapText: true };
+    cell.border = { bottom: mediumBorder(theme.excel.strongBorderColor) };
+  });
+
+  items.forEach((it, i) => {
+    const r = ws.getRow(12 + i);
+    r.height = 24;
+    const values: (string | number | null)[] = [
+      i + 1,
+      it.requestedDescription || it.offeredDescription,
+      it.uom,
+      it.qty,
+      null,
+      null,
+    ];
+    values.forEach((v, c) => {
+      const cell = r.getCell(c + 2);
+      cell.value = v === null ? '' : v;
+      cell.font = { name: fontName, size: 10, color: { argb: theme.excel.formulaFont } };
+      cell.alignment = { vertical: 'middle', horizontal: cols[c].align, wrapText: c === 1 };
+      cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+      if (c === 3 || c === 4 || c === 5) cell.numFmt = c === 3 ? '#,##0.##' : '#,##0.00';
+    });
+  });
+
+  let cursor = 12 + Math.max(items.length, 1) + 1;
+  const terms = `Please quote unit price and total in ${currency}, delivered ${job.controls.incoterm} ${job.controls.destination}, with lead time, validity and country of origin. Include certificates of analysis or safety data sheets where they apply.`;
+  ws.mergeCells(cursor, 2, cursor, lastCol);
+  const termCell = ws.getCell(cursor, 2);
+  termCell.value = terms;
+  termCell.font = { name: fontName, size: 9, color: { argb: 'FF334155' } };
+  termCell.alignment = { wrapText: true, vertical: 'top' };
+  ws.getRow(cursor).height = 30;
+  cursor += 3;
+  ws.getCell(cursor, 2).value = `${job.controls.authorizedSignatory || 'Authorized signatory'}: ___________________________`;
+  ws.getCell(cursor, 2).font = { name: fontName, size: 9, bold: true, color: { argb: 'FF334155' } };
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const safe = (rfqNumber || job.jobName).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40) || 'RFQ';
+  const filename = `Supplier_RFQ_${safe}.xlsx`;
   await triggerDownload(buffer as ArrayBuffer, filename);
   return filename;
 }
