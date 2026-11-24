@@ -1952,7 +1952,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
             >
               <div className="flex items-center gap-4">
                 {company.logoDataUrl && (
-                  <div className="w-14 h-14 rounded-md bg-white p-1.5 flex items-center justify-center shrink-0">
+                  <div className="w-24 h-24 rounded-md bg-white p-2 flex items-center justify-center shrink-0">
                     <img
                       src={company.logoDataUrl}
                       alt={company.name}
@@ -2284,7 +2284,7 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                     </div>
                     <div className="flex justify-between py-2 border-b border-slate-200">
                       <span className="text-slate-600">
-                        FREIGHT &amp; DOCUMENTATION ({job.controls.incoterm})
+                        FREIGHT &amp; DOCUMENTATION · {calc.freightMode === 'sea' ? 'SEA' : 'AIR'} FREIGHT ({job.controls.incoterm})
                       </span>
                       <span className="font-medium text-slate-900">
                         {formatMoney(calc.customerFreight, curr)}

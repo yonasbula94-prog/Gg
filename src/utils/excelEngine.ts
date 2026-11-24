@@ -76,85 +76,76 @@ function styleBannerHeader(
   docNumber: string,
   colCount: number
 ): void {
-  // Col A is clean 2-char margin spacer; content spans Col B .. Col (colCount + 1)
+  // Matches the A4 preview: brand banner (logo, name, tagline, title) then a contact bar with the accent rule.
+  // Col A is a clean margin spacer; content spans Col B .. Col (colCount + 1)
   const lastCol = colCount + 1;
   const fontName = theme.fontName || 'Calibri';
+  const solid = (argb: string) => ({ type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb } });
 
   ws.getRow(1).height = 8;
+  ws.getRow(2).height = 86; // larger logo band (was 44)
+  ws.getRow(3).height = 24;
 
-  // Row 2: Brand banner with embedded logo in Col B (white tile) + Company name in Col C..
-  ws.getRow(2).height = 44;
-
+  // Logo: white tile in Col B with the logo centred in it
   if (company.logoDataUrl && company.logoDataUrl.startsWith('data:image/')) {
     try {
       const imgId = wb.addImage({
         base64: company.logoDataUrl,
         extension: detectImageExtension(company.logoDataUrl),
       });
-      ws.getCell(2, 2).fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FFFFFFFF' },
-      };
+      ws.getCell(2, 2).fill = solid('FFFFFFFF');
       ws.addImage(imgId, {
-        tl: { col: 1.08, row: 1.08 },
-        ext: { width: 46, height: 48 },
+        tl: { col: 1.08, row: 1.12 },
+        ext: { width: 104, height: 98 },
       });
     } catch {
-      // Fallback cleanly if custom logo is unreadable
+      // Unreadable logo: the banner still prints without it
     }
+  } else {
+    ws.getCell(2, 2).fill = solid(theme.excel.headerFill);
   }
 
+  // Name (large) and tagline in Col C..
   ws.mergeCells(2, 3, 2, lastCol - 2);
   const brandCell = ws.getCell(2, 3);
-  brandCell.value = company.name;
-  brandCell.font = { name: fontName, size: 16, bold: true, color: { argb: theme.excel.headerFont } };
-  brandCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  brandCell.value = {
+    richText: [
+      { text: company.name, font: { name: fontName, size: 20, bold: true, color: { argb: theme.excel.headerFont } } },
+      { text: `\n${company.tagline}`, font: { name: fontName, size: 9, color: { argb: theme.excel.headerFont } } },
+    ],
+  };
+  brandCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1, wrapText: true };
 
+  // Document title (right)
   ws.mergeCells(2, lastCol - 1, 2, lastCol);
   const titleCell = ws.getCell(2, lastCol - 1);
   titleCell.value = docTitle;
-  titleCell.font = { name: fontName, size: 13, bold: true, color: { argb: theme.excel.headerFont } };
+  titleCell.font = { name: fontName, size: 16, bold: true, color: { argb: theme.excel.headerFont } };
   titleCell.alignment = { vertical: 'middle', horizontal: 'right', indent: 1 };
 
   for (let c = 3; c <= lastCol; c++) {
-    ws.getCell(2, c).fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: theme.excel.headerFill },
-    };
+    ws.getCell(2, c).fill = solid(theme.excel.headerFill);
   }
-  if (!company.logoDataUrl) {
-    ws.getCell(2, 2).fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: theme.excel.headerFill },
-    };
+  if (!(company.logoDataUrl && company.logoDataUrl.startsWith('data:image/'))) {
+    ws.getCell(2, 2).fill = solid(theme.excel.headerFill);
   }
 
-  // Row 3: Subtitle + document number (omitted cleanly when unissued — never prints "DRAFT")
+  // Contact bar (row 3): secondary background, accent rule underneath
   ws.mergeCells(3, 2, 3, lastCol - 2);
   const subCell = ws.getCell(3, 2);
-  subCell.value = `${company.addressLine1}, ${company.addressLine2}  |  ${company.email}`;
-  subCell.font = { name: fontName, size: 9, color: { argb: 'FF475569' } };
+  subCell.value = `${company.addressLine1}, ${company.addressLine2}  |  ${company.email}  |  TRN ${company.trn}`;
+  subCell.font = { name: fontName, size: 9, color: { argb: 'FF' + theme.mutedText.replace('#', '') } };
   subCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
 
   ws.mergeCells(3, lastCol - 1, 3, lastCol);
   const docNoCell = ws.getCell(3, lastCol - 1);
-  docNoCell.value = docNumber.trim() ? `DOC NO: ${docNumber.trim()}` : '';
+  docNoCell.value = `DOC NO: ${docNumber}`;
   docNoCell.font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.strongBorderColor } };
   docNoCell.alignment = { vertical: 'middle', horizontal: 'right', indent: 1 };
 
-  ws.getRow(3).height = 20;
   for (let c = 2; c <= lastCol; c++) {
-    ws.getCell(3, c).fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: theme.excel.subHeaderFill },
-    };
-    ws.getCell(3, c).border = {
-      bottom: mediumBorder(theme.excel.accentFill),
-    };
+    ws.getCell(3, c).fill = solid('FF' + theme.secondaryBg.replace('#', ''));
+    ws.getCell(3, c).border = { bottom: mediumBorder('FF' + theme.accent.replace('#', '')) };
   }
 }
 
@@ -338,7 +329,7 @@ export async function exportIssuedDocumentXlsx(
     {
       key: 'no',
       header: 'No.',
-      width: 6,
+      width: 13,
       align: 'center',
       getValue: (_row, idx) => idx + 1,
     },
@@ -402,18 +393,21 @@ export async function exportIssuedDocumentXlsx(
         ];
 
   ws.getRow(4).height = 8;
-  const rightLabelCol = Math.max(6, lastCol - 2);
-  const rightValStart = rightLabelCol + 1;
+  // Right-hand labels span two columns so names such as "PAYMENT TERMS" are not cut off
+  const rightLabelCol = Math.max(5, lastCol - 3);
+  const rightValStart = rightLabelCol + 2;
   for (let i = 0; i < 5; i++) {
     const r = 5 + i;
-    ws.getRow(r).height = 19;
+    ws.getRow(r).height = 26;
 
+    ws.mergeCells(r, 2, r, 3);
     ws.getCell(r, 2).value = leftMeta[i][0];
     ws.getCell(r, 2).font = { name: fontName, size: 9, bold: true, color: { argb: 'FF64748B' } };
-    ws.mergeCells(r, 3, r, rightLabelCol - 2);
-    ws.getCell(r, 3).value = leftMeta[i][1];
-    ws.getCell(r, 3).font = { name: fontName, size: 10, bold: i === 0, color: { argb: theme.excel.formulaFont } };
+    if (rightLabelCol - 1 > 4) ws.mergeCells(r, 4, r, rightLabelCol - 1);
+    ws.getCell(r, 4).value = leftMeta[i][1];
+    ws.getCell(r, 4).font = { name: fontName, size: 10, bold: i === 0, color: { argb: theme.excel.formulaFont } };
 
+    ws.mergeCells(r, rightLabelCol, r, rightLabelCol + 1);
     ws.getCell(r, rightLabelCol).value = rightMeta[i][0];
     ws.getCell(r, rightLabelCol).font = { name: fontName, size: 9, bold: true, color: { argb: 'FF64748B' } };
     if (lastCol > rightValStart) {
@@ -421,7 +415,7 @@ export async function exportIssuedDocumentXlsx(
     }
     ws.getCell(r, rightValStart).value = rightMeta[i][1];
     ws.getCell(r, rightValStart).font = { name: fontName, size: 10, bold: i === 0, color: { argb: theme.excel.formulaFont } };
-    ws.getCell(r, rightValStart).alignment = { horizontal: 'right', vertical: 'middle' };
+    ws.getCell(r, rightValStart).alignment = { horizontal: 'right', vertical: 'middle', wrapText: true };
   }
 
   ws.getRow(10).height = 10;
@@ -548,11 +542,11 @@ export async function exportIssuedDocumentXlsx(
     const valCol = lastCol;
     const summaryLines: [string, number, boolean][] = [
       ['GOODS SUBTOTAL', calc.goodsSubtotal, false],
-      [`FREIGHT & DOCUMENTATION (${job.controls.incoterm})`, calc.customerFreight, false],
+      [`FREIGHT & DOCUMENTATION · ${calc.freightMode === 'sea' ? 'SEA' : 'AIR'} FREIGHT (${job.controls.incoterm})`, calc.customerFreight, false],
       [`GRAND TOTAL (${job.controls.currency})`, calc.grandTotal, true],
     ];
 
-    const labelStartCol = Math.max(2, valCol - 3);
+    const labelStartCol = Math.max(2, valCol - 4);
     summaryLines.forEach(([label, val, isGrand]) => {
       const r = ws.getRow(cursor);
       r.height = isGrand ? 26 : 21;
@@ -625,6 +619,8 @@ export async function exportIssuedDocumentXlsx(
     }
   }
 
+  // Print-only layout: protected so the document cannot be changed by accident (no password)
+  ws.protect('', { selectLockedCells: true, selectUnlockedCells: true, formatCells: false, formatColumns: false, formatRows: false });
   const buffer = await wb.xlsx.writeBuffer();
   const safeBase = docNumber
     ? docNumber.replace(/[^a-zA-Z0-9_-]/g, '_')
@@ -661,7 +657,7 @@ export async function exportJobTemplateXlsx(
   });
   wsPI.columns = [
     { width: 2 },
-    { width: 6 },  // B: No.
+    { width: 13 }, // B: No. (wide enough for the logo tile)
     { width: 28 }, // C: Requested Desc
     { width: 32 }, // D: Offered Desc
     { width: 9 },  // E: UoM
@@ -780,13 +776,14 @@ export async function exportJobTemplateXlsx(
   // PI Totals (Rows 38-40 — ZERO VAT row on customer-facing PI)
   const piSummary: [number, string, string, boolean][] = [
     [38, 'GOODS SUBTOTAL', 'SUM(H17:H36)', false],
-    [39, 'FREIGHT & DOCUMENTATION', "'PRICE CALC'!R41", false],
+    // Label is a formula so it follows the freight method chosen on PRICE CALC (E5)
+    [39, '="FREIGHT & DOCUMENTATION · "&IF(\'PRICE CALC\'!E5="SEA","SEA","AIR")&" FREIGHT"', "'PRICE CALC'!R41", false],
     [40, 'GRAND TOTAL', 'H38+H39', true],
   ];
   piSummary.forEach(([r, label, formula, isGrand]) => {
     wsPI.getRow(r).height = isGrand ? 26 : 21;
     wsPI.mergeCells(r, 5, r, 7);
-    wsPI.getCell(r, 5).value = label;
+    wsPI.getCell(r, 5).value = label.startsWith('=') ? { formula: label.slice(1) } : label;
     wsPI.getCell(r, 5).alignment = { horizontal: 'right', vertical: 'middle' };
     wsPI.getCell(r, 8).value = { formula };
     wsPI.getCell(r, 8).numFmt = '#,##0.00';
@@ -1161,7 +1158,7 @@ export async function exportJobTemplateXlsx(
       }));
 
     const dsSpecs: DsColSpec[] = [
-      { key: 'no', header: 'No.', width: 6, align: 'center' },
+      { key: 'no', header: 'No.', width: 13, align: 'center' },
       ...dsCustom('after_no'),
       { key: 'requested', header: 'Requested Description', width: isLogistics ? 26 : 28, align: 'left' },
       ...dsCustom('after_requested'),
