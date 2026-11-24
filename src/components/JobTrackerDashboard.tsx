@@ -105,7 +105,7 @@ export const JobTrackerDashboard: React.FC<JobTrackerDashboardProps> = ({
       const filename =
         kind === "xlsx"
           ? await exportDashboardReportXlsx(chosen, registry, theme, company, prefs)
-          : await exportDashboardReportPdf(chosen, registry, theme, company, prefs, "landscape");
+          : await exportDashboardReportPdf(chosen, registry, theme, company, prefs, pdfOrientation);
       onNotify(`Exported ${filename} (${chosen.length} selected job${chosen.length === 1 ? "" : "s"})`);
     } catch {
       onNotify("Could not export the selected jobs. Please try again.");

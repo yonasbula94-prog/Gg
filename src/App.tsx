@@ -716,7 +716,13 @@ export default function App() {
   const handleSaveRevision = (reason: string) => {
     if (!amendment) return;
     const { prefix, snapshot } = amendment;
-    const job = activeJob;
+    // Save the job that was unlocked, even if the user has since switched the active job
+    const job = jobs.find((j) => j.id === amendment.jobId);
+    if (!job) {
+      setAmendment(null);
+      setAmendDialog(null);
+      return;
+    }
     const changes = diffJobs(snapshot, job);
     const doc = job.issuedDocs[prefix];
     if (!doc || doc.isVoided) {

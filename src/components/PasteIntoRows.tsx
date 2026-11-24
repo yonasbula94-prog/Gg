@@ -39,7 +39,8 @@ export const PasteIntoRows: React.FC<PasteIntoRowsProps> = ({ fields, rowIds, di
     const pairs: { rowId: number; value: unknown }[] = [];
     sorted.forEach((rowId, i) => {
       const raw = lines.length === 1 ? lines[0] : lines[i];
-      if (raw === undefined) return;
+      // Empty cells in the copied text leave that row unchanged
+      if (raw === undefined || raw === '') return;
       const value = field.parse(raw);
       if (value !== undefined) pairs.push({ rowId, value });
     });

@@ -1858,6 +1858,28 @@ export async function importWorkbookFromXlsx(
     if (e3 !== null && e3 >= 0 && e3 <= 5) {
       job.freight.selectedMarkupPct = e3;
     }
+    // Freight method and freight-only settings (written by the exporter on PRICE CALC rows 5-8)
+    const freightMode = cellToString(wsPC.getCell('E5').value).toUpperCase();
+    if (freightMode === 'SEA' || freightMode === 'AIR') {
+      job.freight.mode = freightMode === 'SEA' ? 'sea' : 'air';
+    }
+    const freightMkp = cellToNumber(wsPC.getCell('E6').value);
+    if (freightMkp !== null && freightMkp >= 0 && freightMkp <= 5) job.freight.freightMarkupPct = freightMkp;
+    const loadingPct = cellToNumber(wsPC.getCell('E7').value);
+    if (loadingPct !== null && loadingPct >= 0 && loadingPct <= 1) job.freight.loadingChargePct = loadingPct;
+    const containerKeys = [
+      { key: 'c20', row: 6 },
+      { key: 'c40', row: 7 },
+      { key: 'c40hc', row: 8 },
+    ] as const;
+    const counts = { c20: 0, c40: 0, c40hc: 0 };
+    const rates = { c20: 0, c40: 0, c40hc: 0 };
+    for (const { key, row } of containerKeys) {
+      counts[key] = Math.max(0, Math.floor(cellToNumber(wsPC.getCell(`J${row}`).value) ?? 0));
+      rates[key] = Math.max(0, cellToNumber(wsPC.getCell(`K${row}`).value) ?? 0);
+    }
+    job.freight.containers = counts;
+    job.freight.containerRates = rates;
     // Read internal VAT from PRICE CALC!E4 (if present)
     const e4 = cellToNumber(wsPC.getCell('E4').value);
     if (e4 !== null && e4 >= 0 && e4 <= 1) {

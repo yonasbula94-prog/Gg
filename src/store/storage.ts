@@ -1,3 +1,4 @@
+import type { ContainerCounts } from '../types/procurement';
 import defaultLogoUrl from '../assets/grand-group-logo.png?inline';
 import {
   COMPANY_INFO,
@@ -377,6 +378,16 @@ export function createSeededRegistry(): RegistryEntry[] {
   return [];
 }
 
+function normalizeContainerCounts(raw: unknown): ContainerCounts | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const pick = (k: keyof ContainerCounts) => {
+    const n = Number(r[k]);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  return { c20: pick('c20'), c40: pick('c40'), c40hc: pick('c40hc') };
+}
+
 export function normalizeJob(raw: unknown): ProcurementJob {
   const fallback = createBlankJob('Procurement Job #1');
   if (!raw || typeof raw !== 'object') return fallback;
@@ -600,6 +611,18 @@ export function normalizeJob(raw: unknown): ProcurementJob {
         fallback.freight.selectedMarkupPct,
         5
       ),
+      // Sea freight and freight markup. Missing values stay undefined: freight then follows the item markup (existing jobs)
+      mode: rawFreight.mode === 'sea' ? 'sea' : 'air',
+      containers: normalizeContainerCounts(rawFreight.containers),
+      containerRates: normalizeContainerCounts(rawFreight.containerRates),
+      loadingChargePct:
+        rawFreight.loadingChargePct === undefined
+          ? undefined
+          : safeRate(rawFreight.loadingChargePct, 0.05, 1),
+      freightMarkupPct:
+        rawFreight.freightMarkupPct === undefined
+          ? undefined
+          : safeRate(rawFreight.freightMarkupPct, fallback.freight.selectedMarkupPct, 5),
     },
     customColumns,
     columnOrder,
