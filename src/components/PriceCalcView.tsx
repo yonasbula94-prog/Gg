@@ -54,6 +54,17 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
   const includeVat = job.controls.includeVat !== false;
   const vatRateDisplay = Math.round((job.controls.vatRate * 100 + Number.EPSILON) * 100) / 100;
   const effectiveVat = calc.effectiveVatRate;
+  // Once any document is issued the costing is frozen: edits would change the issued totals.
+  const isIssued = Object.values(job.issuedDocs).some((d) => d && !d.isVoided);
+  const guardItem = (rowNumber: number, patch: Partial<JobItemRow>) => {
+    if (!isIssued) onUpdateItem(rowNumber, patch);
+  };
+  const guardFreight = (patch: Partial<FreightConfig>) => {
+    if (!isIssued) onUpdateFreight(patch);
+  };
+  const guardControls = (patch: Partial<JobControls>) => {
+    if (!isIssued) onUpdateControls(patch);
+  };
   const supName = job.supplierQuote?.supplierName || job.controls.supplierName;
   const supRef = job.supplierQuote?.supplierQuoteRef || job.controls.supplierRef;
   const supTerms = job.supplierQuote?.paymentTerms || '';
@@ -120,6 +131,13 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
         )}
       </div>
 
+      {isIssued && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900">
+          <Lock className="w-3.5 h-3.5 shrink-0" />
+          <span>A document is issued for this job, so costing is locked to keep issued totals accurate. Create a new job to revise pricing.</span>
+        </div>
+      )}
+
       {/* Controls Strip: Markup Selector (E3) + Internal VAT Toggle (E4) + Freight Rates */}
       <div className="rounded-lg border border-slate-200 bg-white p-5 space-y-5">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-end">
@@ -137,7 +155,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                     <button
                       key={rate}
                       type="button"
-                      onClick={() => onUpdateFreight({ selectedMarkupPct: rate })}
+                      onClick={() => guardFreight({ selectedMarkupPct: rate })}
                       className={`min-h-[40px] rounded-md text-sm font-semibold font-mono-tabular transition-colors cursor-pointer whitespace-nowrap ${
                         isSelected
                           ? 'text-white shadow-sm'
@@ -173,12 +191,12 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                     onChange={(e) => {
                       const raw = e.target.value;
                       if (raw === '') {
-                        onUpdateFreight({ selectedMarkupPct: 0 });
+                        guardFreight({ selectedMarkupPct: 0 });
                         return;
                       }
                       const num = Number(raw);
                       if (Number.isFinite(num) && num >= 0 && num <= 500) {
-                        onUpdateFreight({ selectedMarkupPct: num / 100 });
+                        guardFreight({ selectedMarkupPct: num / 100 });
                       }
                     }}
                     className="w-16 bg-transparent text-right text-sm font-mono-tabular font-bold text-blue-700 focus:outline-none"
@@ -200,7 +218,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                 <button
                   type="button"
                   onClick={() =>
-                    onUpdateControls({
+                    guardControls({
                       includeVat: true,
                       vatRate: job.controls.vatRate > 0 ? job.controls.vatRate : 0.05,
                     })
@@ -216,7 +234,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => onUpdateControls({ includeVat: false })}
+                  onClick={() => guardControls({ includeVat: false })}
                   className={`px-3.5 min-h-[40px] rounded-md text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
                     !includeVat
                       ? 'bg-slate-900 text-white shadow-sm'
@@ -249,12 +267,12 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                   onChange={(e) => {
                     const raw = e.target.value;
                     if (raw === '') {
-                      onUpdateControls({ vatRate: 0 });
+                      guardControls({ vatRate: 0 });
                       return;
                     }
                     const num = Number(raw);
                     if (Number.isFinite(num) && num >= 0 && num <= 100) {
-                      onUpdateControls({
+                      guardControls({
                         includeVat: true,
                         vatRate: Math.round(num * 100) / 10000,
                       });
@@ -281,7 +299,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
               min="0"
               value={job.freight.ratePerCbm}
               onChange={(e) =>
-                onUpdateFreight({ ratePerCbm: Math.max(0, Number(e.target.value) || 0) })
+                guardFreight({ ratePerCbm: Math.max(0, Number(e.target.value) || 0) })
               }
               className="w-full min-h-[42px] rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm font-mono-tabular text-blue-700 font-medium focus:border-slate-900 focus:bg-white focus:outline-none"
             />
@@ -297,7 +315,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
               min="0"
               value={job.freight.ratePerKg}
               onChange={(e) =>
-                onUpdateFreight({ ratePerKg: Math.max(0, Number(e.target.value) || 0) })
+                guardFreight({ ratePerKg: Math.max(0, Number(e.target.value) || 0) })
               }
               className="w-full min-h-[42px] rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm font-mono-tabular text-blue-700 font-medium focus:border-slate-900 focus:bg-white focus:outline-none"
             />
@@ -314,7 +332,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
               max="100"
               value={Math.round((job.freight.docChargePct * 100 + Number.EPSILON) * 100) / 100}
               onChange={(e) =>
-                onUpdateFreight({
+                guardFreight({
                   docChargePct: Math.min(100, Math.max(0, Number(e.target.value) || 0)) / 100,
                 })
               }
@@ -375,7 +393,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
             <button
               key={rate}
               type="button"
-              onClick={() => onUpdateFreight({ selectedMarkupPct: rate })}
+              onClick={() => guardFreight({ selectedMarkupPct: rate })}
               className={`text-left rounded-lg border p-4 transition-colors cursor-pointer ${
                 isActive
                   ? 'bg-white border-slate-900 ring-1 ring-slate-900'
@@ -435,13 +453,14 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
           </div>
           <IPadJobEditor
             mode="costing"
+            disabled={isIssued}
             items={job.items}
             computedRows={calc.rows}
             currency={curr}
             theme={theme}
             activeMarkupPct={activeMarkup}
             effectiveVatRate={effectiveVat}
-            onUpdateItem={onUpdateItem}
+            onUpdateItem={guardItem}
             onRequestConfirm={onRequestConfirm}
           />
         </div>
@@ -521,7 +540,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                           value={raw.supplierUnitCost ?? ''}
                           placeholder={isInactive ? '' : '0.00'}
                           onChange={(e) =>
-                            onUpdateItem(row.rowNumber, {
+                            guardItem(row.rowNumber, {
                               supplierUnitCost: parseOptionalNumber(e.target.value),
                             })
                           }
@@ -539,7 +558,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                           disabled={isInactive}
                           value={raw.boxes ?? ''}
                           onChange={(e) =>
-                            onUpdateItem(row.rowNumber, { boxes: parseOptionalNumber(e.target.value) })
+                            guardItem(row.rowNumber, { boxes: parseOptionalNumber(e.target.value) })
                           }
                           className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-1.5 py-1 text-right text-blue-700 focus:outline-none"
                         />
@@ -552,7 +571,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                           disabled={isInactive}
                           value={raw.boxLengthCm ?? ''}
                           onChange={(e) =>
-                            onUpdateItem(row.rowNumber, { boxLengthCm: parseOptionalNumber(e.target.value) })
+                            guardItem(row.rowNumber, { boxLengthCm: parseOptionalNumber(e.target.value) })
                           }
                           className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-1.5 py-1 text-right text-blue-700 focus:outline-none"
                         />
@@ -565,7 +584,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                           disabled={isInactive}
                           value={raw.boxWidthCm ?? ''}
                           onChange={(e) =>
-                            onUpdateItem(row.rowNumber, { boxWidthCm: parseOptionalNumber(e.target.value) })
+                            guardItem(row.rowNumber, { boxWidthCm: parseOptionalNumber(e.target.value) })
                           }
                           className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-1.5 py-1 text-right text-blue-700 focus:outline-none"
                         />
@@ -578,7 +597,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                           disabled={isInactive}
                           value={raw.boxHeightCm ?? ''}
                           onChange={(e) =>
-                            onUpdateItem(row.rowNumber, { boxHeightCm: parseOptionalNumber(e.target.value) })
+                            guardItem(row.rowNumber, { boxHeightCm: parseOptionalNumber(e.target.value) })
                           }
                           className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-1.5 py-1 text-right text-blue-700 focus:outline-none"
                         />
@@ -594,7 +613,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                           disabled={isInactive}
                           value={raw.kgPerBox ?? ''}
                           onChange={(e) =>
-                            onUpdateItem(row.rowNumber, { kgPerBox: parseOptionalNumber(e.target.value) })
+                            guardItem(row.rowNumber, { kgPerBox: parseOptionalNumber(e.target.value) })
                           }
                           className="w-full min-h-[34px] rounded border border-transparent hover:border-slate-300 focus:border-slate-900 bg-transparent focus:bg-white px-1.5 py-1 text-right text-blue-700 focus:outline-none"
                         />

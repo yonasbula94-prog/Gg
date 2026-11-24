@@ -13,11 +13,15 @@ import {
 } from './calculations';
 import { shareOrDownloadBlob } from './platform';
 
-// A4 Landscape in PDF points (1 pt = 1/72 in): 841.89 x 595.28
-const PAGE_W = 842;
-const PAGE_H = 595;
-const MARGIN = 32;
-const CONTENT_W = PAGE_W - MARGIN * 2;
+export type DashboardPdfOrientation = 'landscape' | 'portrait';
+
+// A4 page sizes in PDF points (1 pt = 1/72 in)
+const PAGE_SIZES: Record<DashboardPdfOrientation, { w: number; h: number }> = {
+  landscape: { w: 842, h: 595 },
+  portrait: { w: 595, h: 842 },
+};
+// Generous print-safe outer margin (42pt) for both orientations
+const MARGIN_PT = 42;
 
 function hexToRgb(hex: string): [number, number, number] {
   const clean = (hex || '#1B365D').replace('#', '').trim();
@@ -63,8 +67,14 @@ function approxTextWidth(text: string, fontSize: number, bold = false): number {
 class PdfDocBuilder {
   private pages: string[][] = [];
   private current: string[] = [];
+  private pw: number;
+  private ph: number;
+  private mg = MARGIN_PT;
 
-  constructor() {
+  constructor(orientation: DashboardPdfOrientation = 'landscape') {
+    const size = PAGE_SIZES[orientation];
+    this.pw = size.w;
+    this.ph = size.h;
     this.newPage();
   }
 
@@ -78,7 +88,7 @@ class PdfDocBuilder {
   }
 
   private y(topY: number): number {
-    return +(PAGE_H - topY).toFixed(2);
+    return +(this.ph - topY).toFixed(2);
   }
 
   rect(
@@ -100,7 +110,7 @@ class PdfDocBuilder {
       ops.push(`${r} ${g} ${b} RG`);
       ops.push(`${lineWidth} w`);
     }
-    const bottomY = +(PAGE_H - topY - h).toFixed(2);
+    const bottomY = +(this.ph - topY - h).toFixed(2);
     ops.push(`${x.toFixed(2)} ${bottomY} ${w.toFixed(2)} ${h.toFixed(2)} re`);
     if (fillHex && strokeHex) ops.push('B');
     else if (fillHex) ops.push('f');
@@ -145,7 +155,7 @@ class PdfDocBuilder {
 
     const [r, g, b] = hexToRgb(color);
     const fontKey = bold ? '/F2' : '/F1';
-    const baselineY = +(PAGE_H - topY - size * 0.82).toFixed(2);
+    const baselineY = +(this.ph - topY - size * 0.82).toFixed(2);
     this.current.push(
       `BT ${fontKey} ${size} Tf ${r} ${g} ${b} rg 1 0 0 1 ${drawX.toFixed(2)} ${baselineY} Tm (${safe}) Tj ET`
     );
@@ -156,12 +166,12 @@ class PdfDocBuilder {
     this.pages.forEach((stream, idx) => {
       const saved = this.current;
       this.current = stream;
-      this.line(MARGIN, PAGE_H - 26, PAGE_W - MARGIN, PAGE_H - 26, '#CBD5E1', 0.6);
-      this.text(`${companyName} | Procurement Dashboard Report | Generated ${generatedAt}`, MARGIN, PAGE_H - 21, {
+      this.line(this.mg, this.ph - 26, this.pw - this.mg, this.ph - 26, '#CBD5E1', 0.6);
+      this.text(`${companyName} | Procurement Dashboard Report | Generated ${generatedAt}`, this.mg, this.ph - 21, {
         size: 7.5,
         color: '#64748B',
       });
-      this.text(`Page ${idx + 1} of ${total}`, PAGE_W - MARGIN, PAGE_H - 21, {
+      this.text(`Page ${idx + 1} of ${total}`, this.pw - this.mg, this.ph - 21, {
         size: 7.5,
         bold: true,
         color: '#475569',
@@ -198,7 +208,7 @@ class PdfDocBuilder {
       const streamBody = this.pages[i].join('\n');
       const streamBytes = encoder.encode(streamBody).length;
       objects.push(
-        `${pageNum} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PAGE_W} ${PAGE_H}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentNum} 0 R >>\nendobj\n`
+        `${pageNum} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${this.pw} ${this.ph}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentNum} 0 R >>\nendobj\n`
       );
       objects.push(
         `${contentNum} 0 obj\n<< /Length ${streamBytes} >>\nstream\n${streamBody}\nendstream\nendobj\n`
@@ -255,7 +265,7 @@ function getMonthKey(date: Date): string {
 }
 
 /**
- * Generates and downloads a styled, multi-page A4 Landscape PDF report
+ * Generates and downloads a styled, multi-page A4 PDF report (landscape or portrait)
  * mirroring the user's active Dashboard configuration and theme colors.
  */
 export async function exportDashboardReportPdf(
@@ -263,10 +273,14 @@ export async function exportDashboardReportPdf(
   registry: RegistryEntry[],
   theme: ThemePalette,
   company: CompanyProfile,
-  prefs: DashboardPreferences
+  prefs: DashboardPreferences,
+  orientation: DashboardPdfOrientation = 'landscape'
 ): Promise<string> {
   const todayStr = new Date().toISOString().slice(0, 10);
-  const pdf = new PdfDocBuilder();
+  const { w: PAGE_W, h: PAGE_H } = PAGE_SIZES[orientation];
+  const MARGIN = MARGIN_PT;
+  const CONTENT_W = PAGE_W - MARGIN * 2;
+  const pdf = new PdfDocBuilder(orientation);
 
   const enrichedAll = jobs.map((job) => {
     const calc = calculateJob(job);
@@ -703,22 +717,22 @@ export async function exportDashboardReportPdf(
           { text: ej.metrics.hasQT ? 'OK' : '-', bold: ej.metrics.hasQT, color: ej.metrics.hasQT ? '#047857' : '#94A3B8' },
           { text: ej.metrics.hasPI ? 'OK' : '-', bold: ej.metrics.hasPI, color: ej.metrics.hasPI ? '#047857' : '#94A3B8' },
           {
-            text: ej.metrics.hasPO ? 'OK' : ej.metrics.hasEndUserPoGate ? '-' : 'Gate',
+            text: ej.metrics.hasPO ? 'OK' : ej.metrics.hasEndUserPoGate ? '-' : 'Pending',
             bold: ej.metrics.hasPO,
             color: ej.metrics.hasPO ? '#047857' : ej.metrics.hasEndUserPoGate ? '#64748B' : '#B45309',
           },
           {
-            text: ej.metrics.hasCI ? 'OK' : ej.metrics.hasEndUserPoGate ? '-' : 'Gate',
+            text: ej.metrics.hasCI ? 'OK' : ej.metrics.hasEndUserPoGate ? '-' : 'Pending',
             bold: ej.metrics.hasCI,
             color: ej.metrics.hasCI ? '#047857' : ej.metrics.hasEndUserPoGate ? '#64748B' : '#B45309',
           },
           {
-            text: ej.metrics.hasPL ? 'OK' : ej.metrics.hasSupplierShipmentGate ? '-' : 'Gate',
+            text: ej.metrics.hasPL ? 'OK' : ej.metrics.hasSupplierShipmentGate ? '-' : 'Pending',
             bold: ej.metrics.hasPL,
             color: ej.metrics.hasPL ? '#047857' : ej.metrics.hasSupplierShipmentGate ? '#64748B' : '#B45309',
           },
           {
-            text: ej.metrics.hasDN ? 'OK' : ej.metrics.hasPL ? '-' : 'Gate',
+            text: ej.metrics.hasDN ? 'OK' : ej.metrics.hasPL ? '-' : 'Pending',
             bold: ej.metrics.hasDN,
             color: ej.metrics.hasDN ? '#047857' : ej.metrics.hasPL ? '#64748B' : '#B45309',
           },

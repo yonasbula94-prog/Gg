@@ -123,7 +123,7 @@ export class AppErrorBoundary extends React.Component<
             ) : (
               <div className="rounded-lg border border-red-200 bg-red-50 p-3.5 space-y-2.5">
                 <p className="text-xs text-red-900 font-medium">
-                  This clears locally stored jobs and resets the workspace to a blank job. Export an Emergency JSON backup first if you want a copy.
+                  This clears locally stored jobs and company settings and resets the workspace to a blank job. The Master Registry is kept so issued numbers are never reused. Export an Emergency JSON backup first if you want a copy.
                 </p>
                 <div className="flex items-center gap-2">
                   <button

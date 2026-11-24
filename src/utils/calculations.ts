@@ -314,6 +314,22 @@ export function validateForIssue(
     return issues;
   }
 
+  // Freight is based on CBM: a line with boxes but an incomplete box size would silently understate it
+  if (prefix === "QT" || prefix === "PI" || prefix === "CI") {
+    job.items.forEach((item, idx) => {
+      const rowNumber = 17 + idx;
+      const hasBoxes = (item.boxes ?? 0) > 0;
+      const hasFullSize = (item.boxLengthCm ?? 0) > 0 && (item.boxWidthCm ?? 0) > 0 && (item.boxHeightCm ?? 0) > 0;
+      if (hasBoxes && !hasFullSize) {
+        issues.push({
+          rowNumber,
+          field: "boxDimensions",
+          message: `Cannot issue yet: row  has boxes but no full box size (L, W, H cm). Freight would be understated.`,
+        });
+      }
+    });
+  }
+
   for (const row of calc.rows) {
     if (row.isEmpty) continue;
 
@@ -459,7 +475,7 @@ export function getWorkflowGateStatus(
   if (prefix === 'PI') {
     return {
       isReady: hasQT,
-      title: 'Stage 2 · Proforma Invoice Gate',
+      title: 'Stage 2 · Proforma Invoice Checklist',
       requirements: [
         {
           id: 'qt_issued',
@@ -480,7 +496,7 @@ export function getWorkflowGateStatus(
     const poConfirmed = Boolean(wf?.endUserPoConfirmed);
     return {
       isReady: poConfirmed,
-      title: `Stage 3 · Client PO Confirmation Gate (${docLabel})`,
+      title: `Stage 3 · Client PO Confirmation Checklist (${docLabel})`,
       requirements: [
         {
           id: 'pi_issued',
@@ -507,7 +523,7 @@ export function getWorkflowGateStatus(
     const ready = paid && supPl;
     return {
       isReady: ready,
-      title: 'Stage 4 · Supplier Payment & Packing List Gate',
+      title: 'Stage 4 · Supplier Payment & Packing List Checklist',
       requirements: [
         {
           id: 'po_issued',
@@ -536,7 +552,7 @@ export function getWorkflowGateStatus(
   // DN
   return {
     isReady: hasPL,
-    title: 'Stage 4 · Delivery Note Gate',
+    title: 'Stage 4 · Delivery Note Checklist',
     requirements: [
       {
         id: 'pl_issued',

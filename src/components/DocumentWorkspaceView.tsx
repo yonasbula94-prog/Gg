@@ -291,9 +291,9 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
         .map((r) => `• ${r.label}`)
         .join('\n');
       onRequestConfirm({
-        title: `Workflow Gate Warning — Override & Issue ${meta.shortName}?`,
-        message: `Recommended stage prerequisites are not yet complete:\n${unmet}\n\n${gateStatus.guidance}\n\nYou can complete those steps first, or override this gate and issue ${plannedDocNo} manually now.`,
-        confirmLabel: `Override Gate & Issue ${meta.shortName}`,
+        title: `Prerequisite Step Incomplete — Issue Anyway?`,
+        message: `Recommended stage prerequisites are not yet complete:\n${unmet}\n\n${gateStatus.guidance}\n\nYou can complete those steps first, or issue ${plannedDocNo} manually now.`,
+        confirmLabel: `Issue Anyway ()`,
         destructive: false,
         onConfirm: () => onIssueDocument(prefix),
       });

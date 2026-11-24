@@ -28,7 +28,7 @@ import {
   getJobCompletionMetrics,
   getResolvedEndUser,
 } from '../utils/calculations';
-import { exportDashboardReportPdf } from '../utils/dashboardPdf';
+import { DashboardPdfOrientation, exportDashboardReportPdf } from "../utils/dashboardPdf";
 import { exportDashboardReportXlsx } from '../utils/excelEngine';
 import { HelpTip } from './HelpTip';
 
@@ -94,6 +94,8 @@ export const JobTrackerDashboard: React.FC<JobTrackerDashboardProps> = ({
   const [stageFilter, setStageFilter] = useState<StageFilter>('ALL');
   const [exportingExcel, setExportingExcel] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
+  const [pdfModalOpen, setPdfModalOpen] = useState(false);
+  const [pdfOrientation, setPdfOrientation] = useState<DashboardPdfOrientation>("landscape");
 
   const handleDownloadExcelReport = async () => {
     setExportingExcel(true);
@@ -110,10 +112,11 @@ export const JobTrackerDashboard: React.FC<JobTrackerDashboardProps> = ({
   const handleDownloadPdfReport = async () => {
     setExportingPdf(true);
     try {
-      const filename = await exportDashboardReportPdf(jobs, registry, theme, company, prefs);
+      const filename = await exportDashboardReportPdf(jobs, registry, theme, company, prefs, pdfOrientation);
       onNotify(`Downloaded Dashboard PDF report: ${filename}`);
+      setPdfModalOpen(false);
     } catch {
-      onNotify('Could not generate Dashboard PDF report. Please try again.');
+      onNotify("Could not generate Dashboard PDF report. Please try again.");
     } finally {
       setExportingPdf(false);
     }
@@ -362,7 +365,7 @@ export const JobTrackerDashboard: React.FC<JobTrackerDashboardProps> = ({
       ) : (
         <>
           <Clock className="w-3 h-3 text-amber-600 shrink-0" />
-          <span>Gate</span>
+          <span>Pending</span>
         </>
       )}
     </button>
@@ -402,7 +405,7 @@ export const JobTrackerDashboard: React.FC<JobTrackerDashboardProps> = ({
           <button
             type="button"
             disabled={exportingPdf}
-            onClick={handleDownloadPdfReport}
+            onClick={() => setPdfModalOpen(true)}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800 hover:bg-slate-50 cursor-pointer min-h-[40px] whitespace-nowrap disabled:opacity-50"
           >
             <FileDown className="w-3.5 h-3.5 text-red-700" />
@@ -1202,6 +1205,58 @@ export const JobTrackerDashboard: React.FC<JobTrackerDashboardProps> = ({
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {pdfModalOpen && (
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-xl space-y-5">
+            <div>
+              <h3 className="text-base font-semibold text-slate-900">Dashboard PDF Report</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Choose the page layout. Margins are 42pt so no text or table column is clipped.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {(
+                [
+                  { id: 'landscape', title: 'A4 Landscape', hint: 'Recommended for the full job matrix' },
+                  { id: 'portrait', title: 'A4 Portrait', hint: 'Stacked executive summary' },
+                ] as { id: DashboardPdfOrientation; title: string; hint: string }[]
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setPdfOrientation(opt.id)}
+                  className={`rounded-lg border p-4 text-left cursor-pointer transition-colors ${
+                    pdfOrientation === opt.id
+                      ? 'border-slate-900 ring-1 ring-slate-900'
+                      : 'border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="text-sm font-semibold text-slate-900">{opt.title}</div>
+                  <div className="mt-1 text-xs text-slate-500">{opt.hint}</div>
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPdfModalOpen(false)}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={exportingPdf}
+                onClick={handleDownloadPdfReport}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 cursor-pointer disabled:opacity-50"
+              >
+                {exportingPdf ? 'Preparing...' : 'Download PDF'}
+              </button>
+            </div>
           </div>
         </div>
       )}

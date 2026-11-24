@@ -91,9 +91,9 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
   return (
     <div className="space-y-6">
       {/* Internal Confidentiality Strip & Primary Flow Actions */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-[#ff5656] px-5 py-3.5">
-        <div className="flex items-center gap-2.5 min-w-0 bg-[#f6f6f6] [border-style:groove] rounded-[6px] h-[39.9875px] w-[416.763px] pb-[1px] -ml-[1px]">
-          <Lock className="w-4 h-4 text-red-700 shrink-0" />
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-5 py-3.5">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Lock className="w-4 h-4 text-slate-600 shrink-0" />
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
               <h2 className="text-sm font-semibold text-slate-900">
@@ -101,7 +101,7 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
               </h2>
               <HelpTip text="Confidential supplier intake sheet. Supplier details automatically pre-fill Supplier PO, and supplier unit costs & offered items flow directly into Price Calc and Customer Quotation." />
             </div>
-            <p className="text-xs text-[#000000]">
+            <p className="text-xs text-slate-500">
               Internal Only · Feeds Price Calc &amp; Supplier PO · Never Sent to Client
             </p>
           </div>

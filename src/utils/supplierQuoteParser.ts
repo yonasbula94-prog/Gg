@@ -79,9 +79,9 @@ export function parseFlexibleNumber(raw: string | number | null | undefined): nu
   if (!cleaned) return null;
 
   // Handle European decimal formats: "1.250,50" -> "1250.50" or "45,50" -> "45.50"
-  if (/^-?\d{1,3}(\.\d{3})+,\d{1,4}$/.test(cleaned)) {
+  if (/^-?\d{1,3}(\.\d{3})+,\d{1,2}$/.test(cleaned)) {
     cleaned = cleaned.replace(/\./g, '').replace(',', '.');
-  } else if (/^-?\d+,\d{1,4}$/.test(cleaned) && !cleaned.includes('.')) {
+  } else if (/^-?\d+,\d{1,2}$/.test(cleaned) && !cleaned.includes('.')) {
     cleaned = cleaned.replace(',', '.');
   } else {
     cleaned = cleaned.replace(/,/g, '');
@@ -118,16 +118,13 @@ function extractMetadataFromText(lines: string[], filename: string): {
 } {
   const fullText = lines.join('\n');
 
-  // Currency
-  let currency = 'USD';
-  for (const c of CURRENCY_OPTIONS) {
-    if (new RegExp(`\\b${c}\\b`, 'i').test(fullText)) {
-      currency = c;
-      break;
-    }
-  }
-  if (currency === 'USD' && /€/.test(fullText)) currency = 'EUR';
-  else if (currency === 'USD' && /£/.test(fullText)) currency = 'GBP';
+  // Currency: prefer lines that carry a price (so an incidental "USD" mention elsewhere does not win)
+  const priceLines = lines.filter((l) => /\d+[.,]\d{2}\b/.test(l)).join("\n");
+  const findCurrency = (text: string): string | undefined =>
+    CURRENCY_OPTIONS.find((c) => new RegExp(`\\b${c}\\b`, "i").test(text));
+  let currency = findCurrency(priceLines) ?? findCurrency(fullText) ?? "USD";
+  if (currency === "USD" && /€/.test(priceLines || fullText)) currency = "EUR";
+  else if (currency === "USD" && /£/.test(priceLines || fullText)) currency = "GBP";
 
   // Incoterm
   let incoterm = '';
@@ -1094,7 +1091,7 @@ export function parsePastedSupplierQuote(
 
       if (numIndices.length >= 2) {
         const dataNums =
-          numIndices[0].idx === 0 && numIndices[0].val <= 50 && Number.isInteger(numIndices[0].val)
+          numIndices[0].idx === 0 && Number.isInteger(numIndices[0].val) && numIndices[0].val === items.length + 1
             ? numIndices.slice(1)
             : numIndices;
 

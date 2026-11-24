@@ -46,6 +46,7 @@ import {
   loadThemeVariant,
   normalizeCompanyProfile,
   normalizeJob,
+  mergeRegistryEntries,
   normalizeRegistryEntries,
   normalizeThemeCustomization,
   safeDeepClone,
@@ -455,14 +456,7 @@ export default function App() {
   };
 
   const handleSyncRegistry = (incoming: RegistryEntry[]) => {
-    setRegistry((prev) => {
-      const byDoc = new Map<string, RegistryEntry>();
-      prev.forEach((e) => byDoc.set(e.docNumber, e));
-      incoming.forEach((e) => byDoc.set(e.docNumber, e));
-      return Array.from(byDoc.values()).sort(
-        (a, b) => a.sequence - b.sequence || a.docNumber.localeCompare(b.docNumber)
-      );
-    });
+    setRegistry((prev) => mergeRegistryEntries(prev, incoming));
   };
 
   const handleImportJob = (imported: ProcurementJob) => {
@@ -675,7 +669,7 @@ export default function App() {
       setActiveJobId(normalized[0].id);
     }
     const cleanReg = normalizeRegistryEntries(restoredRegistry);
-    setRegistry(cleanReg);
+    setRegistry((prev) => mergeRegistryEntries(prev, cleanReg));
     if (restoredCompany) {
       const normCompany = normalizeCompanyProfile(restoredCompany);
       saveCompanyProfile(normCompany);

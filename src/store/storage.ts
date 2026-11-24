@@ -833,11 +833,29 @@ export function exportEmergencyRawStorageJson(): string {
 }
 
 export function clearAllAppStorage(): void {
-  for (const key of Object.values(STORAGE_KEYS)) {
+  // The Master Registry is kept on purpose: clearing it would let issued numbers be claimed again.
+  for (const key of Object.values(STORAGE_KEYS).filter((k) => k !== STORAGE_KEYS.REGISTRY)) {
     try {
       localStorage.removeItem(key);
     } catch {
       // Ignore
     }
   }
+}
+
+/**
+ * Merges incoming registry rows into existing ones by document number.
+ * Numbers are never removed, and a VOID entry is never reverted to ISSUED.
+ */
+export function mergeRegistryEntries(base: RegistryEntry[], incoming: RegistryEntry[]): RegistryEntry[] {
+  const byDoc = new Map<string, RegistryEntry>();
+  base.forEach((e) => byDoc.set(e.docNumber, e));
+  incoming.forEach((e) => {
+    const existing = byDoc.get(e.docNumber);
+    if (existing && existing.status === 'VOID' && e.status !== 'VOID') return;
+    byDoc.set(e.docNumber, existing && existing.status === 'VOID' ? existing : e);
+  });
+  return Array.from(byDoc.values()).sort(
+    (a, b) => a.sequence - b.sequence || a.docNumber.localeCompare(b.docNumber)
+  );
 }

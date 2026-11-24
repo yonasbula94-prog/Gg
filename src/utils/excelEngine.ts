@@ -629,7 +629,7 @@ export async function exportIssuedDocumentXlsx(
 
 /**
  * 2. FULL LIVE-FORMULA GG_Job_Template.xlsx BUILDER
- * Includes HOW TO USE, PROFORMA INVOICE (rows 17-36 + K:L controls + L5 VAT),
+ * Includes PROFORMA INVOICE (rows 17-36 + K:L controls + L5 VAT),
  * PRICE CALC (E3 markup selector, 10/15/18/20% scenarios, Col R -> PI Unit Price, MAX freight + doc fee + markup),
  * QUOTATION, SUPPLIER PO, PACKING LIST, DELIVERY NOTE, COMMERCIAL INVOICE, and CONTROLS (with Pharmecore fixed).
  */
@@ -644,38 +644,6 @@ export async function exportJobTemplateXlsx(
   const wb = new ExcelJS.Workbook();
   wb.creator = company.name;
   wb.created = new Date();
-
-  // --- SHEET 1: HOW TO USE ---
-  const wsHow = wb.addWorksheet('HOW TO USE', { views: [{ showGridLines: false }] });
-  wsHow.columns = [{ width: 3 }, { width: 26 }, { width: 78 }];
-  wsHow.mergeCells('B2:C2');
-  wsHow.getCell('B2').value = `${company.name} — PROCUREMENT WORKBOOK GUIDE`;
-  wsHow.getCell('B2').font = { name: fontName, size: 15, bold: true, color: { argb: theme.excel.headerFont } };
-  wsHow.getCell('B2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
-  wsHow.getRow(2).height = 30;
-
-  const guideRows: [string, string][] = [
-    ['1. Single Entry Point', 'Enter items ONCE on PROFORMA INVOICE rows 17–36 (Requested Description, Offered Description, UoM, Qty). Never insert or sort rows on a single tab.'],
-    ['2. Internal Costing & VAT', 'Enter Supplier Unit Cost, Boxes, Box L/W/H (cm), and Kg/Box on PRICE CALC rows 17–36. Set active markup % in PRICE CALC!E3 and internal VAT % in PRICE CALC!E4 (set to 0% to remove VAT).'],
-    ['3. Confidential Unit Pricing', 'Unit Price = ROUND(Supplier Cost * (1 + Markup %) * (1 + Internal VAT %), 2). PRICE CALC Column R feeds PI Unit Price directly so end-user documents NEVER show a separate VAT row.'],
-    ['4. Freight Calculation', 'Base Freight = MAX(Total CBM * Rate/CBM, Total Gross KG * Rate/KG). Documentation charge (default 10%) is added first, then selected markup % is applied. Shown as a separate line before Grand Total.'],
-    ['5. Sequential Numbering', 'Claim numbers exclusively from Master_Registry.xlsx (PREFIX-GG-SEQ-YEAR), starting from #001.'],
-    ['6. Issuing & Confidentiality', 'Export values-only .xlsx per document tab. NEVER send PRICE CALC or the master job workbook to customers.'],
-    ['7. End-User List (Updated)', 'CONTROLS!A2:A10 contains the confirmed end-user dropdown list including Pharmecore and OTHER.'],
-  ];
-
-  guideRows.forEach(([title, desc], idx) => {
-    const r = 4 + idx;
-    wsHow.getRow(r).height = 30;
-    wsHow.getCell(r, 2).value = title;
-    wsHow.getCell(r, 2).font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.strongBorderColor } };
-    wsHow.getCell(r, 2).alignment = { vertical: 'middle' };
-    wsHow.getCell(r, 3).value = desc;
-    wsHow.getCell(r, 3).font = { name: fontName, size: 10, color: { argb: 'FF1E293B' } };
-    wsHow.getCell(r, 3).alignment = { vertical: 'middle', wrapText: true };
-    wsHow.getCell(r, 2).border = { bottom: thinBorder(theme.excel.borderColor) };
-    wsHow.getCell(r, 3).border = { bottom: thinBorder(theme.excel.borderColor) };
-  });
 
   // --- SHEET 2: PROFORMA INVOICE (Entry sheet, rows 17-36, Controls K:L, TO in C8, VAT in L5) ---
   const wsPI = wb.addWorksheet('PROFORMA INVOICE', {
@@ -1788,7 +1756,6 @@ export async function importWorkbookFromXlsx(
         const offDesc = cellToString(wsPI.getCell(r, offCol).value);
         const uom = cellToString(wsPI.getCell(r, uomCol).value);
         const qty = cellToNumber(wsPI.getCell(r, qtyCol).value);
-        const price = cellToNumber(wsPI.getCell(r, priceCol).value);
         if ((reqDesc || offDesc) && qty !== null && qty > 0) {
           foundRows += 1;
           job.items[i] = {
@@ -1797,7 +1764,7 @@ export async function importWorkbookFromXlsx(
             offeredDescription: offDesc || reqDesc,
             uom: uom || 'PCS',
             qty,
-            supplierUnitCost: price !== null ? Number((price / 1.2).toFixed(2)) : null,
+            supplierUnitCost: null, // sale price includes markup/VAT; cost is not recoverable from it
           };
         }
       }
@@ -2216,10 +2183,10 @@ export async function exportDashboardReportXlsx(
       ej.metrics.hasInternalQuote ? 'Ready' : '—',
       ej.metrics.hasQT ? 'Issued' : '—',
       ej.metrics.hasPI ? 'Issued' : '—',
-      ej.metrics.hasPO ? 'Issued' : ej.metrics.hasEndUserPoGate ? 'Ready' : 'Gate',
-      ej.metrics.hasCI ? 'Issued' : ej.metrics.hasEndUserPoGate ? 'Ready' : 'Gate',
-      ej.metrics.hasPL ? 'Issued' : ej.metrics.hasSupplierShipmentGate ? 'Ready' : 'Gate',
-      ej.metrics.hasDN ? 'Issued' : ej.metrics.hasPL ? 'Ready' : 'Gate',
+      ej.metrics.hasPO ? 'Issued' : ej.metrics.hasEndUserPoGate ? 'Ready' : 'Pending',
+      ej.metrics.hasCI ? 'Issued' : ej.metrics.hasEndUserPoGate ? 'Ready' : 'Pending',
+      ej.metrics.hasPL ? 'Issued' : ej.metrics.hasSupplierShipmentGate ? 'Ready' : 'Pending',
+      ej.metrics.hasDN ? 'Issued' : ej.metrics.hasPL ? 'Ready' : 'Pending',
       ...(prefs.showFinancials
         ? [ej.job.controls.currency, ej.calc.grandTotal, ej.calc.grossProfit, ej.marginPct / 100]
         : []),
@@ -2237,7 +2204,7 @@ export async function exportDashboardReportXlsx(
           argb:
             v === 'Issued'
               ? 'FF047857'
-              : v === 'Gate'
+              : v === 'Pending'
               ? 'FFB45309'
               : theme.excel.formulaFont,
         },
