@@ -182,6 +182,9 @@ type TradeMetaPairs = { left: [string, string][]; right: [string, string][] };
 
 const TRADE_FIRST_ROW = 12; // first item row on the trade sheets
 const TRADE_SLOTS = 20; // item rows mirrored from PROFORMA INVOICE items
+// Print margins shared by every printable sheet (inches)
+const PRINT_MARGINS = { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.25, footer: 0.25 };
+
 // Proforma layout: metadata rows 5-10, table header row 12, items rows 13-32, totals rows 33-35
 const PI_HEADER_ROW = 12;
 const PI_FIRST_ROW = 13;
@@ -192,7 +195,7 @@ const PRICE_CALC_FIRST_ROW = 17; // PRICE CALC item rows
 function addTradeWorksheet(wb: ExcelJS.Workbook, prefix: DocPrefix, hasCustomCols: boolean, onePage: boolean): ExcelJS.Worksheet {
   const isLogistics = prefix === 'PL' || prefix === 'DN';
   return wb.addWorksheet(DOC_META[prefix].sheetName, {
-    views: [{ showGridLines: false, state: 'frozen', ySplit: 11 }],
+    views: [{ showGridLines: false }],
     pageSetup: {
       paperSize: 9, // A4
       orientation: isLogistics || hasCustomCols ? 'landscape' : 'portrait',
@@ -601,6 +604,7 @@ function renderTradeSheet(
   ws.columns = [{ width: 2 }, ...colSpecs.map((c) => ({ width: c.width }))];
 
   styleBannerHeader(wb, ws, theme, company, meta.title, opts.docNumber, colCount);
+  ws.pageSetup.printTitlesRow = '11:11'; // table header repeats on each printed page
   const ctx: TradeCtx = { ws, theme, fontName, lastCol };
 
   // Metadata block (rows 5-9)
@@ -822,7 +826,7 @@ export async function exportJobTemplateXlsx(
   // Same layout as the other trade documents: metadata on rows 5-10 (inputs are the value cells),
   // table header row 12, items rows 13-32, totals rows 33-35. Importer reads it by label and row.
   const wsPI = wb.addWorksheet('PROFORMA INVOICE', {
-    views: [{ showGridLines: false, state: 'frozen', ySplit: PI_HEADER_ROW }],
+    views: [{ showGridLines: false }],
     pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
   wsPI.columns = [
@@ -836,6 +840,8 @@ export async function exportJobTemplateXlsx(
     { width: 16 }, // H: Total Price
   ];
 
+  wsPI.pageSetup.margins = PRINT_MARGINS;
+  wsPI.pageSetup.printTitlesRow = `${PI_HEADER_ROW}:${PI_HEADER_ROW}`;
   styleBannerHeader(
     wb,
     wsPI,
@@ -974,9 +980,11 @@ export async function exportJobTemplateXlsx(
 
   // --- SHEET 2B: INTERNAL QUOTE (Confidential Supplier Offer & Commercial Terms) ---
   const wsIQ = wb.addWorksheet('INTERNAL QUOTE', {
-    views: [{ showGridLines: false, state: 'frozen', ySplit: 12 }],
+    views: [{ showGridLines: false }],
     pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
+  wsIQ.pageSetup.margins = PRINT_MARGINS;
+  wsIQ.pageSetup.printTitlesRow = '12:12';
   wsIQ.columns = [
     { width: 2 },
     { width: 6 },
@@ -1058,9 +1066,12 @@ export async function exportJobTemplateXlsx(
 
   // --- SHEET 3: PRICE CALC (INTERNAL ONLY, E3 = Markup %, Col R = Active Unit Price, R41 = Customer Freight) ---
   const wsPC = wb.addWorksheet('PRICE CALC', {
-    views: [{ showGridLines: false, state: 'frozen', ySplit: 16 }],
+    views: [{ showGridLines: false }],
     pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
+  wsPC.pageSetup.margins = PRINT_MARGINS;
+  wsPC.pageSetup.printTitlesRow = '16:16';
+  wsPC.pageSetup.fitToHeight = 1; // whole sheet, including the freight summary, prints on one page
   wsPC.columns = [
     { width: 2 },  // A spacer
     { width: 5 },  // B No
@@ -1068,12 +1079,12 @@ export async function exportJobTemplateXlsx(
     { width: 7 },  // D Qty
     { width: 12 }, // E Supplier Unit Cost (and E3 Markup %)
     { width: 13 }, // F Supplier Total
-    { width: 8 },  // G Boxes
-    { width: 8 },  // H L cm
-    { width: 8 },  // I W cm
-    { width: 8 },  // J H cm
-    { width: 10 }, // K CBM
-    { width: 9 },  // L Kg/Box
+    { width: 10 }, // G Boxes
+    { width: 9 },  // H L cm
+    { width: 9 },  // I W cm
+    { width: 12 }, // J H cm / container count
+    { width: 13 }, // K CBM / container rate
+    { width: 12 }, // L Kg/Box / container freight
     { width: 11 }, // M Gross KG
     { width: 12 }, // N 10% Price
     { width: 12 }, // O 15% Price
@@ -1099,12 +1110,18 @@ export async function exportJobTemplateXlsx(
   wsPC.getCell('E3').font = { name: fontName, size: 11, bold: true, color: { argb: theme.excel.inputFont } };
   wsPC.getCell('E3').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
 
-  wsPC.getCell('H3').value = 'Rate/CBM:';
+  wsPC.mergeCells('G3:H3');
+  wsPC.getCell('G3').value = 'Rate/CBM:';
+  wsPC.getCell('G3').font = { name: fontName, size: 10, bold: true };
+  wsPC.getCell('G3').alignment = { horizontal: 'right', vertical: 'middle' };
   wsPC.getCell('I3').value = includeCurrentData ? job.freight.ratePerCbm : 185;
   wsPC.getCell('I3').numFmt = '#,##0.00';
   wsPC.getCell('I3').font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.inputFont } };
 
-  wsPC.getCell('K3').value = 'Rate/KG:';
+  wsPC.mergeCells('J3:K3');
+  wsPC.getCell('J3').value = 'Rate/KG:';
+  wsPC.getCell('J3').font = { name: fontName, size: 10, bold: true };
+  wsPC.getCell('J3').alignment = { horizontal: 'right', vertical: 'middle' };
   wsPC.getCell('L3').value = includeCurrentData ? job.freight.ratePerKg : 2.4;
   wsPC.getCell('L3').numFmt = '#,##0.00';
   wsPC.getCell('L3').font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.inputFont } };
@@ -1133,6 +1150,8 @@ export async function exportJobTemplateXlsx(
     'Internal VAT (E4) is folded directly into Unit Prices (Cols N–R). End-user sheets (PI / QT / CI) NEVER show a VAT line.';
   wsPC.getCell('H4').font = { name: fontName, size: 9, italic: true, color: { argb: 'FF64748B' } };
 
+  // Rows 9-15 are spacing above the item table (the table position is fixed: PROFORMA INVOICE links to rows 17-36)
+  for (let r = 9; r <= 15; r++) wsPC.getRow(r).height = 6;
   const pcHeaders = [
     'No.', 'Offered Description', 'Qty', 'Supplier Cost', 'Supplier Total',
     'Boxes', 'L (cm)', 'W (cm)', 'H (cm)', 'CBM', 'Kg/Box', 'Gross KG',
@@ -1193,6 +1212,10 @@ export async function exportJobTemplateXlsx(
   }
 
   // Freight Summary Block on PRICE CALC rows 38-41 (R41 feeds PI!H40)
+  wsPC.mergeCells('B37:E37');
+  wsPC.getCell('B37').value = 'TOTALS';
+  wsPC.getCell('B37').font = { name: fontName, size: 9, bold: true };
+  wsPC.getCell('B37').alignment = { horizontal: 'right', vertical: 'middle' };
   wsPC.getCell('F37').value = { formula: 'SUM(F17:F36)' };
   wsPC.getCell('F37').numFmt = '#,##0.00';
   wsPC.getCell('K37').value = { formula: 'SUM(K17:K36)' };
@@ -1228,10 +1251,13 @@ export async function exportJobTemplateXlsx(
   wsPC.getCell('E7').value = loadingPctX;
   wsPC.getCell('E7').numFmt = '0.##%';
   inputStyle(wsPC.getCell('E7'));
+  wsPC.mergeCells('G5:I5');
+  wsPC.getRow(5).height = 30;
   ['G5', 'J5', 'K5', 'L5'].forEach((ref, i) => {
-    wsPC.getCell(ref).value = ['Sea container', 'Containers', 'Rate / container', 'Freight'][i];
+    wsPC.getCell(ref).value = ['Sea container', 'Containers', 'Rate per container', 'Freight'][i];
     wsPC.getCell(ref).font = { name: 'Calibri', size: 9, bold: true, color: { argb: theme.excel.headerFont } };
     wsPC.getCell(ref).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.headerFill } };
+    wsPC.getCell(ref).alignment = { vertical: 'middle', horizontal: i === 0 ? 'left' : 'right', wrapText: true };
   });
   const seaRows: [number, string, keyof typeof counts][] = [
     [6, "20' container", 'c20'],
@@ -1319,10 +1345,12 @@ export async function exportJobTemplateXlsx(
     const isLogistics = prefix === 'PL' || prefix === 'DN';
     const extraCount = templateCustomCols.length;
     const ws = wb.addWorksheet(meta.sheetName, {
-      views: [{ showGridLines: false, state: 'frozen', ySplit: 16 }],
+      views: [{ showGridLines: false }],
       pageSetup: { paperSize: 9, orientation: isLogistics || extraCount > 0 ? 'landscape' : 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 1 },
     });
 
+    ws.pageSetup.margins = PRINT_MARGINS;
+    ws.pageSetup.printTitlesRow = '16:16';
     interface DsColSpec {
       key: string;
       header: string;
@@ -1572,7 +1600,7 @@ export async function exportMasterRegistryXlsx(
   wb.created = new Date();
 
   const ws = wb.addWorksheet('REGISTRY', {
-    views: [{ showGridLines: false, state: 'frozen', ySplit: 4 }],
+    views: [{ showGridLines: false }],
     pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
 
@@ -2442,7 +2470,7 @@ export async function exportDashboardReportXlsx(
 
   // --- SHEET 2: JOB LIFECYCLE TRACKER ---
   const wsTracker = wb.addWorksheet('JOB LIFECYCLE TRACKER', {
-    views: [{ showGridLines: false, state: 'frozen', ySplit: 8 }],
+    views: [{ showGridLines: false }],
     pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
 
@@ -2536,7 +2564,7 @@ export async function exportDashboardReportXlsx(
 
   // --- SHEET 3: PRIORITY RANKING ---
   const wsRank = wb.addWorksheet('PRIORITY RANKING', {
-    views: [{ showGridLines: false, state: 'frozen', ySplit: 8 }],
+    views: [{ showGridLines: false }],
     pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
 
