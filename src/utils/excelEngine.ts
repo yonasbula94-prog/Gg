@@ -154,42 +154,298 @@ function styleBannerHeader(
  * Strictly excludes PRICE CALC, controls block, and macros.
  * Hard-codes the claimed Document No. and freezes values.
  */
-export async function exportIssuedDocumentXlsx(
+/**
+ * Shared renderer for the six trade documents. The values-only export and the workbook trade sheets
+ * (QT, PO, DN, CI) use this one layout, so both match the A4 Print & Excel preview.
+ *  - 'values' mode writes the job's values and protects the sheet for print.
+ *  - 'live' mode writes formulas to PROFORMA INVOICE / PRICE CALC so edits flow through the workbook.
+ */
+type TradeSheetMode = 'values' | 'live';
+
+interface TradeSheetOptions {
+  mode: TradeSheetMode;
+  /** false writes the blank template: no job data, totals stay as formulas */
+  includeCurrentData: boolean;
+  docNumber: string;
+  /** live mode: PROFORMA INVOICE column letter for each custom column id */
+  piCustomLetter?: Map<string, string>;
+}
+
+interface TradeCtx {
+  ws: ExcelJS.Worksheet;
+  theme: ThemePalette;
+  fontName: string;
+  lastCol: number;
+}
+
+type TradeMetaPairs = { left: [string, string][]; right: [string, string][] };
+
+const TRADE_FIRST_ROW = 12; // first item row on the trade sheets
+const TRADE_SLOTS = 20; // item rows mirrored from PROFORMA INVOICE rows 17-36
+const PI_FIRST_ROW = 17;
+
+function addTradeWorksheet(wb: ExcelJS.Workbook, prefix: DocPrefix, hasCustomCols: boolean, onePage: boolean): ExcelJS.Worksheet {
+  const isLogistics = prefix === 'PL' || prefix === 'DN';
+  return wb.addWorksheet(DOC_META[prefix].sheetName, {
+    views: [{ showGridLines: false, state: 'frozen', ySplit: 11 }],
+    pageSetup: {
+      paperSize: 9, // A4
+      orientation: isLogistics || hasCustomCols ? 'landscape' : 'portrait',
+      fitToPage: true,
+      fitToWidth: 1,
+      // Workbook sheets carry 20 formula rows: keep each sheet on one printed page
+      fitToHeight: onePage ? 1 : 0,
+      margins: { left: 0.4, right: 0.4, top: 0.45, bottom: 0.45, header: 0.2, footer: 0.2 },
+    },
+  });
+}
+
+/** Header metadata rows 5-9 for each trade document. */
+function tradeMetaPairs(
+  job: ProcurementJob,
+  company: CompanyProfile,
+  prefix: DocPrefix,
+  endUser: string,
+  issued: ProcurementJob['issuedDocs'][DocPrefix],
+  calc: ReturnType<typeof calculateJob>,
+  useData: boolean
+): TradeMetaPairs {
+  const meta = DOC_META[prefix];
+  const isPO = prefix === 'PO';
+  const issueDate = issued
+    ? new Date(issued.issuedAt).toISOString().slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+
+  const resolvedAddress =
+    job.controls.endUserSelect !== 'OTHER'
+      ? (company.endUserAddresses?.[job.controls.endUserSelect] ?? job.controls.endUserAddress)
+      : job.controls.endUserAddress;
+
+  const left: [string, string][] = isPO
+    ? [
+        ['SUPPLIER', job.controls.supplierName || '—'],
+        ['ADDRESS', job.controls.supplierAddress || '—'],
+        ['SUPPLIER REF', job.controls.supplierRef || '—'],
+        ['INCOTERM', `${job.controls.incoterm} · ${job.controls.destination}`],
+        ['CURRENCY', job.controls.currency],
+      ]
+    : [
+        [meta.recipientLabel, endUser],
+        ['ATTN / CONTACT', job.controls.endUserContact || '—'],
+        ['ADDRESS', resolvedAddress || '—'],
+        ['INCOTERM / DEST', `${job.controls.incoterm} · ${job.controls.destination}`],
+        ['CURRENCY', job.controls.currency],
+      ];
+
+  const right: [string, string][] =
+    prefix === 'PL'
+      ? [
+          ['DATE', issueDate],
+          ['SHIP DATE', job.controls.shipDate || '—'],
+          ['PORT OF LOADING', job.controls.portOfLoading || '—'],
+          ['PI REFERENCE', job.issuedDocs.PI?.docNumber || '—'],
+          ['TOTAL BOXES', String(calc.totalBoxes || '—')],
+        ]
+      : prefix === 'DN'
+      ? [
+          ['DATE', issueDate],
+          ['DELIVERY DATE', job.controls.deliveryDate || '—'],
+          ['TRANSPORT REF', job.controls.transportRef || '—'],
+          ['RECEIVED BY', job.controls.receivedBy || '—'],
+          ['PI REFERENCE', job.issuedDocs.PI?.docNumber || '—'],
+        ]
+      : [
+          ['DATE', issueDate],
+          ['RFQ / TENDER REF', job.controls.rfqRef || '—'],
+          ['CUSTOMER PO REF', job.controls.customerPoRef || '—'],
+          ['PAYMENT TERMS', job.controls.paymentTerms || '—'],
+          ['LEAD TIME', job.controls.deliveryLeadTime || '—'],
+        ];
+
+  if (useData) return { left, right };
+  const blank = (pairs: [string, string][]): [string, string][] => pairs.map(([label]) => [label, ''] as [string, string]);
+  return { left: blank(left), right: blank(right) };
+}
+
+function writeTradeMetaBlock(ctx: TradeCtx, pairs: TradeMetaPairs): void {
+  const { ws, theme, fontName, lastCol } = ctx;
+  ws.getRow(4).height = 8;
+  // Right-hand labels span two columns so names such as "PAYMENT TERMS" are not cut off
+  const rightLabelCol = Math.max(5, lastCol - 3);
+  const rightValStart = rightLabelCol + 2;
+  for (let i = 0; i < 5; i++) {
+    const r = 5 + i;
+    ws.getRow(r).height = 26;
+
+    ws.mergeCells(r, 2, r, 3);
+    ws.getCell(r, 2).value = pairs.left[i][0];
+    ws.getCell(r, 2).font = { name: fontName, size: 9, bold: true, color: { argb: 'FF64748B' } };
+    ws.getCell(r, 2).alignment = { horizontal: 'left', vertical: 'middle' };
+    if (rightLabelCol - 1 > 4) ws.mergeCells(r, 4, r, rightLabelCol - 1);
+    ws.getCell(r, 4).value = pairs.left[i][1];
+    ws.getCell(r, 4).font = { name: fontName, size: 10, bold: i === 0, color: { argb: theme.excel.formulaFont } };
+    ws.getCell(r, 4).alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+
+    ws.mergeCells(r, rightLabelCol, r, rightLabelCol + 1);
+    ws.getCell(r, rightLabelCol).value = pairs.right[i][0];
+    ws.getCell(r, rightLabelCol).font = { name: fontName, size: 9, bold: true, color: { argb: 'FF64748B' } };
+    ws.getCell(r, rightLabelCol).alignment = { horizontal: 'left', vertical: 'middle' };
+    if (lastCol > rightValStart) {
+      ws.mergeCells(r, rightValStart, r, lastCol);
+    }
+    ws.getCell(r, rightValStart).value = pairs.right[i][1];
+    ws.getCell(r, rightValStart).font = { name: fontName, size: 10, bold: i === 0, color: { argb: theme.excel.formulaFont } };
+    ws.getCell(r, rightValStart).alignment = { horizontal: 'right', vertical: 'middle', wrapText: true };
+  }
+  ws.getRow(10).height = 10;
+}
+
+/** Totals row for DN / PL (quantity, cartons, net and gross weight). */
+function writeLogisticsTotals(
+  ctx: TradeCtx,
+  row: number,
+  cols: { qty: number; carton: number; netWt: number; grossWt: number },
+  vals: { qty: ExcelJS.CellValue; cartons: ExcelJS.CellValue; net: ExcelJS.CellValue; gross: ExcelJS.CellValue }
+): void {
+  const { ws, theme, fontName, lastCol } = ctx;
+  const totRow = ws.getRow(row);
+  totRow.height = 24;
+  totRow.getCell(2).value = 'TOTALS';
+  totRow.getCell(2).alignment = { horizontal: 'left', vertical: 'middle' };
+
+  const put = (col: number, value: ExcelJS.CellValue, numFmt: string | null, align: 'center' | 'right') => {
+    if (col < 2) return;
+    const cell = totRow.getCell(col);
+    cell.value = value;
+    if (numFmt) cell.numFmt = numFmt;
+    cell.alignment = { horizontal: align, vertical: 'middle' };
+  };
+  put(cols.qty, vals.qty, '#,##0.##', 'right');
+  put(cols.carton, vals.cartons, null, 'center');
+  put(cols.netWt, vals.net, '#,##0.00', 'right');
+  put(cols.grossWt, vals.gross, '#,##0.00', 'right');
+
+  for (let c = 2; c <= lastCol; c++) {
+    const cell = totRow.getCell(c);
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.totalFill } };
+    cell.font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.strongBorderColor } };
+    cell.border = {
+      top: thinBorder(theme.excel.strongBorderColor),
+      bottom: mediumBorder(theme.excel.strongBorderColor),
+    };
+  }
+}
+
+/** Right-aligned summary lines (goods, freight, grand total) flush to the value column. */
+function writeSummaryLines(
+  ctx: TradeCtx,
+  cursor: number,
+  lines: { label: ExcelJS.CellValue; value: ExcelJS.CellValue; grand?: boolean }[],
+  labelStartCol: number
+): number {
+  const { ws, theme, fontName, lastCol } = ctx;
+  const valCol = lastCol;
+  let row = cursor;
+  lines.forEach(({ label, value, grand }) => {
+    const r = ws.getRow(row);
+    r.height = grand ? 26 : 21;
+    if (valCol - 1 > labelStartCol) {
+      ws.mergeCells(row, labelStartCol, row, valCol - 1);
+    }
+    const lCell = r.getCell(labelStartCol);
+    lCell.value = label;
+    lCell.alignment = { horizontal: 'right', vertical: 'middle' };
+
+    const vCell = r.getCell(valCol);
+    vCell.value = value;
+    vCell.numFmt = '#,##0.00';
+    vCell.alignment = { horizontal: 'right', vertical: 'middle' };
+
+    for (let c = labelStartCol; c <= valCol; c++) {
+      const cell = r.getCell(c);
+      cell.font = {
+        name: fontName,
+        size: grand ? 11 : 10,
+        bold: Boolean(grand),
+        color: { argb: grand ? theme.excel.strongBorderColor : theme.excel.formulaFont },
+      };
+      if (grand) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.totalFill } };
+        cell.border = {
+          top: thinBorder(theme.excel.strongBorderColor),
+          bottom: mediumBorder(theme.excel.strongBorderColor),
+        };
+      } else {
+        cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+      }
+    }
+    row += 1;
+  });
+  return row;
+}
+
+/** Remarks, bank line and signature lines under the totals. */
+function writeTradeFooter(ctx: TradeCtx, cursor: number, job: ProcurementJob, company: CompanyProfile, prefix: DocPrefix): void {
+  const { ws, fontName, lastCol } = ctx;
+  let row = cursor;
+
+  // Footer Remarks & Authorization (100% editable per job; empty omits cleanly)
+  if (job.controls.remarks.trim()) {
+    ws.mergeCells(row, 2, row, lastCol);
+    const rem = ws.getCell(row, 2);
+    rem.value = `Remarks: ${job.controls.remarks.trim()}`;
+    rem.font = { name: fontName, size: 9, italic: true, color: { argb: 'FF475569' } };
+    row += 1;
+  }
+
+  if (prefix === 'PI' || prefix === 'CI') {
+    ws.mergeCells(row, 2, row, lastCol);
+    const bank = ws.getCell(row, 2);
+    bank.value = `${company.bankDetails}  |  ${company.trn}`;
+    bank.font = { name: fontName, size: 9, color: { argb: 'FF475569' } };
+    row += 2;
+  } else {
+    row += 1;
+  }
+
+  // Editable Signature Lines (left & right; leaving empty omits label cleanly)
+  const leftSig = (job.controls.authorizedSignatory ?? '').trim();
+  const rightSig = (job.controls.counterpartySignatory ?? '').trim();
+  if (leftSig) {
+    ws.getCell(row, 2).value = `${leftSig}: ___________________________`;
+    ws.getCell(row, 2).font = { name: fontName, size: 9, bold: true, color: { argb: 'FF334155' } };
+  }
+  if (rightSig) {
+    const rightSigCol = Math.max(6, lastCol - 2);
+    ws.getCell(row, rightSigCol).value = `${rightSig}: ___________________________`;
+    ws.getCell(row, rightSigCol).font = { name: fontName, size: 9, bold: true, color: { argb: 'FF334155' } };
+  }
+}
+
+/** Writes one trade document sheet (banner, metadata, items, totals, footer) into ws. */
+function renderTradeSheet(
+  wb: ExcelJS.Workbook,
+  ws: ExcelJS.Worksheet,
   job: ProcurementJob,
   prefix: DocPrefix,
-  themeOrId: ThemeVariantId | ThemePalette,
-  company: CompanyProfile
-): Promise<string> {
-  const theme = resolveExcelTheme(themeOrId);
+  theme: ThemePalette,
+  company: CompanyProfile,
+  opts: TradeSheetOptions
+): void {
   const fontName = theme.fontName || 'Calibri';
+  const live = opts.mode === 'live';
+  const useData = !live || opts.includeCurrentData;
   const meta = DOC_META[prefix];
   const calc = calculateJob(job);
   const issued = job.issuedDocs[prefix];
-  const docNumber = issued && !issued.isVoided ? issued.docNumber : '';
   const endUser = getResolvedEndUser(job) || '—';
   const isLogistics = prefix === 'PL' || prefix === 'DN';
   const isPO = prefix === 'PO';
-  const customCols = job.customColumns || [];
+  const customCols = useData ? job.customColumns || [] : [];
   const customMap = new Map(customCols.map((c) => [`custom:${c.id}`, c]));
   const orderedKeys = resolveDocumentColumns(job.columnOrder, customCols, isLogistics);
   const colCount = 1 + orderedKeys.length;
   const lastCol = colCount + 1;
-
-  const wb = new ExcelJS.Workbook();
-  wb.creator = company.name;
-  wb.created = new Date();
-
-  const ws = wb.addWorksheet(meta.sheetName, {
-    views: [{ showGridLines: false, state: 'frozen', ySplit: 11 }],
-    pageSetup: {
-      paperSize: 9, // A4
-      orientation: isLogistics || customCols.length > 0 ? 'landscape' : 'portrait',
-      fitToPage: true,
-      fitToWidth: 1,
-      fitToHeight: 0,
-      margins: { left: 0.4, right: 0.4, top: 0.45, bottom: 0.45, header: 0.2, footer: 0.2 },
-    },
-  });
 
   interface IssuedColSpec {
     key: string;
@@ -339,88 +595,13 @@ export async function exportIssuedDocumentXlsx(
   // Column widths (Col A is margin spacer; Col B..lastCol match colSpecs)
   ws.columns = [{ width: 2 }, ...colSpecs.map((c) => ({ width: c.width }))];
 
-  styleBannerHeader(wb, ws, theme, company, meta.title, docNumber, colCount);
+  styleBannerHeader(wb, ws, theme, company, meta.title, opts.docNumber, colCount);
+  const ctx: TradeCtx = { ws, theme, fontName, lastCol };
 
-  // Metadata Block (Rows 5..9)
-  const issueDate = issued
-    ? new Date(issued.issuedAt).toISOString().slice(0, 10)
-    : new Date().toISOString().slice(0, 10);
+  // Metadata block (rows 5-9)
+  writeTradeMetaBlock(ctx, tradeMetaPairs(job, company, prefix, endUser, issued, calc, useData));
 
-  const resolvedAddress =
-    job.controls.endUserSelect !== 'OTHER'
-      ? (company.endUserAddresses?.[job.controls.endUserSelect] ?? job.controls.endUserAddress)
-      : job.controls.endUserAddress;
-
-  const leftMeta: [string, string][] = isPO
-    ? [
-        ['SUPPLIER', job.controls.supplierName || '—'],
-        ['ADDRESS', job.controls.supplierAddress || '—'],
-        ['SUPPLIER REF', job.controls.supplierRef || '—'],
-        ['INCOTERM', `${job.controls.incoterm} · ${job.controls.destination}`],
-        ['CURRENCY', job.controls.currency],
-      ]
-    : [
-        [meta.recipientLabel, endUser],
-        ['ATTN / CONTACT', job.controls.endUserContact || '—'],
-        ['ADDRESS', resolvedAddress || '—'],
-        ['INCOTERM / DEST', `${job.controls.incoterm} · ${job.controls.destination}`],
-        ['CURRENCY', job.controls.currency],
-      ];
-
-  const rightMeta: [string, string][] =
-    prefix === 'PL'
-      ? [
-          ['DATE', issueDate],
-          ['SHIP DATE', job.controls.shipDate || '—'],
-          ['PORT OF LOADING', job.controls.portOfLoading || '—'],
-          ['PI REFERENCE', job.issuedDocs.PI?.docNumber || '—'],
-          ['TOTAL BOXES', String(calc.totalBoxes || '—')],
-        ]
-      : prefix === 'DN'
-      ? [
-          ['DATE', issueDate],
-          ['DELIVERY DATE', job.controls.deliveryDate || '—'],
-          ['TRANSPORT REF', job.controls.transportRef || '—'],
-          ['RECEIVED BY', job.controls.receivedBy || '—'],
-          ['PI REFERENCE', job.issuedDocs.PI?.docNumber || '—'],
-        ]
-      : [
-          ['DATE', issueDate],
-          ['RFQ / TENDER REF', job.controls.rfqRef || '—'],
-          ['CUSTOMER PO REF', job.controls.customerPoRef || '—'],
-          ['PAYMENT TERMS', job.controls.paymentTerms || '—'],
-          ['LEAD TIME', job.controls.deliveryLeadTime || '—'],
-        ];
-
-  ws.getRow(4).height = 8;
-  // Right-hand labels span two columns so names such as "PAYMENT TERMS" are not cut off
-  const rightLabelCol = Math.max(5, lastCol - 3);
-  const rightValStart = rightLabelCol + 2;
-  for (let i = 0; i < 5; i++) {
-    const r = 5 + i;
-    ws.getRow(r).height = 26;
-
-    ws.mergeCells(r, 2, r, 3);
-    ws.getCell(r, 2).value = leftMeta[i][0];
-    ws.getCell(r, 2).font = { name: fontName, size: 9, bold: true, color: { argb: 'FF64748B' } };
-    if (rightLabelCol - 1 > 4) ws.mergeCells(r, 4, r, rightLabelCol - 1);
-    ws.getCell(r, 4).value = leftMeta[i][1];
-    ws.getCell(r, 4).font = { name: fontName, size: 10, bold: i === 0, color: { argb: theme.excel.formulaFont } };
-
-    ws.mergeCells(r, rightLabelCol, r, rightLabelCol + 1);
-    ws.getCell(r, rightLabelCol).value = rightMeta[i][0];
-    ws.getCell(r, rightLabelCol).font = { name: fontName, size: 9, bold: true, color: { argb: 'FF64748B' } };
-    if (lastCol > rightValStart) {
-      ws.mergeCells(r, rightValStart, r, lastCol);
-    }
-    ws.getCell(r, rightValStart).value = rightMeta[i][1];
-    ws.getCell(r, rightValStart).font = { name: fontName, size: 10, bold: i === 0, color: { argb: theme.excel.formulaFont } };
-    ws.getCell(r, rightValStart).alignment = { horizontal: 'right', vertical: 'middle', wrapText: true };
-  }
-
-  ws.getRow(10).height = 10;
-
-  // Table Headers (Row 11)
+  // Table header (row 11)
   const headerRow = ws.getRow(11);
   headerRow.height = 26;
   colSpecs.forEach((spec, idx) => {
@@ -438,19 +619,79 @@ export async function exportIssuedDocumentXlsx(
     };
   });
 
-  // Populated Line Items (values only, no phantom zeros)
+  const colNumOf = (key: string) => colSpecs.findIndex((c) => c.key === key) + 2;
+  const colLetterOf = (key: string): string | null => {
+    const n = colNumOf(key);
+    return n >= 2 ? colToLetter(n) : null;
+  };
+  // Live mode: SUM over the 20 item rows. Values mode: no formula.
+  const sumOf = (key: string): ExcelJS.CellValue | null => {
+    const letter = colLetterOf(key);
+    return live && letter
+      ? { formula: `SUM(${letter}${TRADE_FIRST_ROW}:${letter}${TRADE_FIRST_ROW + TRADE_SLOTS - 1})` }
+      : null;
+  };
+
   const activeRows = calc.rows.filter((r) => !r.isEmpty);
-  let cursor = 12;
+  const rowCount = live ? TRADE_SLOTS : activeRows.length;
 
-  activeRows.forEach((row, idx) => {
-    const r = ws.getRow(cursor);
+  // Live cell: formula into PROFORMA INVOICE (rows 17-36) or PRICE CALC; static values only for logistics fields
+  const staticCell = (spec: IssuedColSpec, row: ComputedRow | undefined): ExcelJS.CellValue => {
+    if (!useData || !row) return '';
+    const v = spec.getValue(row, 0);
+    return v === null || v === undefined ? '' : v;
+  };
+  const liveCell = (spec: IssuedColSpec, i: number): ExcelJS.CellValue => {
+    const piRow = PI_FIRST_ROW + i;
+    const tRow = TRADE_FIRST_ROW + i;
+    const piRef = (col: string): ExcelJS.CellValue => ({
+      formula: `IF('PROFORMA INVOICE'!${col}${piRow}="","",'PROFORMA INVOICE'!${col}${piRow})`,
+    });
+    switch (spec.key) {
+      case 'no':
+        return { formula: `IF('PROFORMA INVOICE'!C${piRow}="","",${i + 1})` };
+      case 'requested':
+        return piRef('C');
+      case 'offered':
+        return piRef('D');
+      case 'uom':
+        return piRef('E');
+      case 'qty':
+        return piRef('F');
+      case 'unit_val':
+        return isPO
+          ? { formula: `IF('PRICE CALC'!E${piRow}="","",'PRICE CALC'!E${piRow})` }
+          : piRef('G');
+      case 'total_val': {
+        const qtyL = colLetterOf('qty');
+        const unitL = colLetterOf('unit_val');
+        if (qtyL && unitL) {
+          return { formula: `IF(OR(${qtyL}${tRow}="",${unitL}${tRow}=""),"",${qtyL}${tRow}*${unitL}${tRow})` };
+        }
+        return isPO ? staticCell(spec, calc.rows[i]) : piRef('H');
+      }
+      default: {
+        const id = spec.key.startsWith('custom:') ? spec.key.slice('custom:'.length) : '';
+        const letter = id ? opts.piCustomLetter?.get(id) : undefined;
+        return letter ? piRef(letter) : staticCell(spec, calc.rows[i]);
+      }
+    }
+  };
+
+  for (let i = 0; i < rowCount; i++) {
+    const r = ws.getRow(TRADE_FIRST_ROW + i);
     r.height = 24;
-    const isZebra = idx % 2 === 1;
-
+    const isZebra = i % 2 === 1;
     colSpecs.forEach((spec, cIdx) => {
-      const v = spec.getValue(row, idx);
+      let v: ExcelJS.CellValue;
+      if (live) {
+        v = liveCell(spec, i);
+      } else {
+        const x = spec.getValue(activeRows[i], i);
+        v = x === null || x === undefined ? '' : x;
+      }
       const cell = r.getCell(cIdx + 2);
-      cell.value = v === null || v === undefined ? '' : v;
+      cell.value = v;
       cell.font = { name: fontName, size: 10, color: { argb: theme.excel.formulaFont } };
       if (isZebra) {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.zebraFill } };
@@ -461,166 +702,88 @@ export async function exportIssuedDocumentXlsx(
         horizontal: spec.align,
         wrapText: Boolean(spec.wrapText),
       };
-      if (spec.numFmt && typeof v === 'number') {
+      if (spec.numFmt && (live || typeof v === 'number')) {
         cell.numFmt = spec.numFmt;
       }
     });
-    cursor += 1;
-  });
+  }
 
-  // Dynamic column lookup helper for totals alignment (resilient to any column reordering)
-  const colNumOf = (key: string) => colSpecs.findIndex((c) => c.key === key) + 2;
-
-  // Summary / Totals Block
-  cursor += 1;
+  // Totals block
+  let cursor = TRADE_FIRST_ROW + rowCount + 1;
   if (isLogistics) {
-    const qtyCol = colNumOf('qty');
-    const cartonCol = colNumOf('carton');
-    const netWtCol = colNumOf('net_wt');
-    const grossWtCol = colNumOf('gross_wt');
-    const totRow = ws.getRow(cursor);
-    totRow.height = 24;
-
-    totRow.getCell(2).value = 'TOTALS';
-    totRow.getCell(2).alignment = { horizontal: 'left', vertical: 'middle' };
-
-    if (qtyCol >= 2) {
-      totRow.getCell(qtyCol).value = calc.totalQty;
-      totRow.getCell(qtyCol).numFmt = '#,##0.##';
-      totRow.getCell(qtyCol).alignment = { horizontal: 'right', vertical: 'middle' };
-    }
-    if (cartonCol >= 2) {
-      totRow.getCell(cartonCol).value = `${calc.totalBoxes} CTNS`;
-      totRow.getCell(cartonCol).alignment = { horizontal: 'center', vertical: 'middle' };
-    }
-    if (netWtCol >= 2) {
-      totRow.getCell(netWtCol).value = calc.plTotalNetWt;
-      totRow.getCell(netWtCol).numFmt = '#,##0.00';
-      totRow.getCell(netWtCol).alignment = { horizontal: 'right', vertical: 'middle' };
-    }
-    if (grossWtCol >= 2) {
-      totRow.getCell(grossWtCol).value = calc.plTotalGrossWt;
-      totRow.getCell(grossWtCol).numFmt = '#,##0.00';
-      totRow.getCell(grossWtCol).alignment = { horizontal: 'right', vertical: 'middle' };
-    }
-
-    for (let c = 2; c <= lastCol; c++) {
-      const cell = totRow.getCell(c);
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.totalFill } };
-      cell.font = { name: fontName, size: 10, bold: true, color: { argb: theme.excel.strongBorderColor } };
-      cell.border = {
-        top: thinBorder(theme.excel.strongBorderColor),
-        bottom: mediumBorder(theme.excel.strongBorderColor),
-      };
-    }
+    const cols = {
+      qty: colNumOf('qty'),
+      carton: colNumOf('carton'),
+      netWt: colNumOf('net_wt'),
+      grossWt: colNumOf('gross_wt'),
+    };
+    writeLogisticsTotals(ctx, cursor, cols, {
+      qty: sumOf('qty') ?? calc.totalQty,
+      cartons: useData ? `${calc.totalBoxes} CTNS` : '',
+      net: sumOf('net_wt') ?? calc.plTotalNetWt,
+      gross: sumOf('gross_wt') ?? calc.plTotalGrossWt,
+    });
     cursor += 2;
   } else if (isPO) {
-    // Always place summary neatly flush-right on the sheet regardless of table column order
-    const valCol = lastCol;
-    const labelStartCol = Math.max(2, valCol - 2);
-    const totRow = ws.getRow(cursor);
-    totRow.height = 26;
-    if (valCol - 1 > labelStartCol) {
-      ws.mergeCells(cursor, labelStartCol, cursor, valCol - 1);
-    }
-    totRow.getCell(labelStartCol).value = `TOTAL ORDER COST (${job.controls.currency})`;
-    totRow.getCell(labelStartCol).alignment = { horizontal: 'right', vertical: 'middle' };
-    totRow.getCell(valCol).value = calc.totalSupplierCost;
-    totRow.getCell(valCol).numFmt = '#,##0.00';
-    totRow.getCell(valCol).alignment = { horizontal: 'right', vertical: 'middle' };
-    for (let c = labelStartCol; c <= valCol; c++) {
-      totRow.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.totalFill } };
-      totRow.getCell(c).font = { name: fontName, size: 11, bold: true, color: { argb: theme.excel.strongBorderColor } };
-      totRow.getCell(c).border = {
-        top: thinBorder(theme.excel.strongBorderColor),
-        bottom: mediumBorder(theme.excel.strongBorderColor),
-      };
-    }
-    cursor += 2;
+    const poTotal = sumOf('total_val') ?? (useData ? calc.totalSupplierCost : '');
+    cursor =
+      writeSummaryLines(
+        ctx,
+        cursor,
+        [{ label: `TOTAL ORDER COST (${job.controls.currency})`, value: poTotal, grand: true }],
+        Math.max(2, lastCol - 2)
+      ) + 1;
   } else {
-    // QT / PI / CI: End-user documents show Goods Subtotal (VAT included in Unit Price) -> Freight -> Grand Total (ZERO VAT row)
-    const valCol = lastCol;
-    const summaryLines: [string, number, boolean][] = [
-      ['GOODS SUBTOTAL', calc.goodsSubtotal, false],
-      [`FREIGHT & DOCUMENTATION · ${calc.freightMode === 'sea' ? 'SEA' : 'AIR'} FREIGHT (${job.controls.incoterm})`, calc.customerFreight, false],
-      [`GRAND TOTAL (${job.controls.currency})`, calc.grandTotal, true],
-    ];
-
-    const labelStartCol = Math.max(2, valCol - 4);
-    summaryLines.forEach(([label, val, isGrand]) => {
-      const r = ws.getRow(cursor);
-      r.height = isGrand ? 26 : 21;
-      if (valCol - 1 > labelStartCol) {
-        ws.mergeCells(cursor, labelStartCol, cursor, valCol - 1);
-      }
-      const lCell = r.getCell(labelStartCol);
-      lCell.value = label;
-      lCell.alignment = { horizontal: 'right', vertical: 'middle' };
-
-      const vCell = r.getCell(valCol);
-      vCell.value = val;
-      vCell.numFmt = '#,##0.00';
-      vCell.alignment = { horizontal: 'right', vertical: 'middle' };
-
-      for (let c = labelStartCol; c <= valCol; c++) {
-        const cell = r.getCell(c);
-        cell.font = {
-          name: fontName,
-          size: isGrand ? 11 : 10,
-          bold: isGrand,
-          color: { argb: isGrand ? theme.excel.strongBorderColor : theme.excel.formulaFont },
-        };
-        if (isGrand) {
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.excel.totalFill } };
-          cell.border = {
-            top: thinBorder(theme.excel.strongBorderColor),
-            bottom: mediumBorder(theme.excel.strongBorderColor),
-          };
-        } else {
-          cell.border = { bottom: thinBorder(theme.excel.borderColor) };
+    // QT / CI: goods subtotal (VAT included in unit price) -> freight -> grand total
+    const piRef = (row: number): ExcelJS.CellValue => ({ formula: `'PROFORMA INVOICE'!H${row}` });
+    const freightLabel: ExcelJS.CellValue = live
+      ? {
+          formula: `"FREIGHT & DOCUMENTATION · "&IF('PRICE CALC'!E5="SEA","SEA","AIR")&" FREIGHT (${job.controls.incoterm.replace(/"/g, '""')})"`,
         }
-      }
-      cursor += 1;
-    });
-    cursor += 1;
+      : `FREIGHT & DOCUMENTATION · ${calc.freightMode === 'sea' ? 'SEA' : 'AIR'} FREIGHT (${job.controls.incoterm})`;
+    cursor =
+      writeSummaryLines(
+        ctx,
+        cursor,
+        [
+          { label: 'GOODS SUBTOTAL', value: live ? piRef(38) : calc.goodsSubtotal },
+          { label: freightLabel, value: live ? piRef(39) : calc.customerFreight },
+          {
+            label: `GRAND TOTAL (${job.controls.currency})`,
+            value: live ? piRef(40) : calc.grandTotal,
+            grand: true,
+          },
+        ],
+        Math.max(2, lastCol - 4)
+      ) + 1;
   }
 
-  // Footer Remarks & Authorization (100% editable per job; empty omits cleanly)
-  if (job.controls.remarks.trim()) {
-    ws.mergeCells(cursor, 2, cursor, lastCol);
-    const rem = ws.getCell(cursor, 2);
-    rem.value = `Remarks: ${job.controls.remarks.trim()}`;
-    rem.font = { name: fontName, size: 9, italic: true, color: { argb: 'FF475569' } };
-    cursor += 1;
-  }
+  if (useData) writeTradeFooter(ctx, cursor, job, company, prefix);
 
-  if (prefix === 'PI' || prefix === 'CI') {
-    ws.mergeCells(cursor, 2, cursor, lastCol);
-    const bank = ws.getCell(cursor, 2);
-    bank.value = `${company.bankDetails}  |  ${company.trn}`;
-    bank.font = { name: fontName, size: 9, color: { argb: 'FF475569' } };
-    cursor += 2;
-  } else {
-    cursor += 1;
+  // Values-only export is print-only: protected so the layout cannot be changed by accident (no password)
+  if (!live) {
+    ws.protect('', { selectLockedCells: true, selectUnlockedCells: true, formatCells: false, formatColumns: false, formatRows: false });
   }
+}
 
-  // Editable Signature Lines (left & right; leaving empty omits label cleanly)
-  const leftSig = (job.controls.authorizedSignatory ?? '').trim();
-  const rightSig = (job.controls.counterpartySignatory ?? '').trim();
-  if (leftSig || rightSig) {
-    if (leftSig) {
-      ws.getCell(cursor, 2).value = `${leftSig}: ___________________________`;
-      ws.getCell(cursor, 2).font = { name: fontName, size: 9, bold: true, color: { argb: 'FF334155' } };
-    }
-    if (rightSig) {
-      const rightSigCol = Math.max(6, lastCol - 2);
-      ws.getCell(cursor, rightSigCol).value = `${rightSig}: ___________________________`;
-      ws.getCell(cursor, rightSigCol).font = { name: fontName, size: 9, bold: true, color: { argb: 'FF334155' } };
-    }
-  }
+export async function exportIssuedDocumentXlsx(
+  job: ProcurementJob,
+  prefix: DocPrefix,
+  themeOrId: ThemeVariantId | ThemePalette,
+  company: CompanyProfile
+): Promise<string> {
+  const theme = resolveExcelTheme(themeOrId);
+  const meta = DOC_META[prefix];
+  const issued = job.issuedDocs[prefix];
+  const docNumber = issued && !issued.isVoided ? issued.docNumber : '';
 
-  // Print-only layout: protected so the document cannot be changed by accident (no password)
-  ws.protect('', { selectLockedCells: true, selectUnlockedCells: true, formatCells: false, formatColumns: false, formatRows: false });
+  const wb = new ExcelJS.Workbook();
+  wb.creator = company.name;
+  wb.created = new Date();
+
+  const ws = addTradeWorksheet(wb, prefix, (job.customColumns || []).length > 0, false);
+  renderTradeSheet(wb, ws, job, prefix, theme, company, { mode: 'values', includeCurrentData: true, docNumber });
+
   const buffer = await wb.xlsx.writeBuffer();
   const safeBase = docNumber
     ? docNumber.replace(/[^a-zA-Z0-9_-]/g, '_')
@@ -1129,9 +1292,20 @@ export async function exportJobTemplateXlsx(
   // --- SHEETS 4..8: QUOTATION, SUPPLIER PO, PACKING LIST, DELIVERY NOTE, COMMERCIAL INVOICE ---
   const downstreamDocs: DocPrefix[] = ['QT', 'PO', 'PL', 'DN', 'CI'];
   for (const prefix of downstreamDocs) {
+    if (prefix !== 'PL') {
+      // QT, PO, DN and CI match the A4 preview layout; their cells are formulas into PROFORMA INVOICE / PRICE CALC
+      const issuedRec = job.issuedDocs[prefix];
+      const ws = addTradeWorksheet(wb, prefix, includeCurrentData && (job.customColumns || []).length > 0, true);
+      renderTradeSheet(wb, ws, job, prefix, theme, company, {
+        mode: 'live',
+        includeCurrentData,
+        docNumber: includeCurrentData && issuedRec && !issuedRec.isVoided ? issuedRec.docNumber : '',
+        piCustomLetter: customPiColLetter,
+      });
+      continue;
+    }
     const meta = DOC_META[prefix];
     const isLogistics = prefix === 'PL' || prefix === 'DN';
-    const isPO = prefix === 'PO';
     const extraCount = templateCustomCols.length;
     const ws = wb.addWorksheet(meta.sheetName, {
       views: [{ showGridLines: false, state: 'frozen', ySplit: 16 }],
@@ -1173,11 +1347,6 @@ export async function exportJobTemplateXlsx(
             { key: 'netWt', header: 'Net Wt (KG)', width: 14, align: 'right', isInput: true, numFmt: '#,##0.00' },
             { key: 'grossWt', header: 'Gross Wt (KG)', width: 14, align: 'right', isInput: true, numFmt: '#,##0.00' },
           ] as DsColSpec[])
-        : isPO
-        ? ([
-            { key: 'price', header: 'Unit Cost', width: 15, align: 'right', numFmt: '#,##0.00' },
-            { key: 'total', header: 'Total Cost', width: 16, align: 'right', numFmt: '#,##0.00' },
-          ] as DsColSpec[])
         : ([
             { key: 'price', header: 'Unit Price', width: 15, align: 'right', numFmt: '#,##0.00' },
             { key: 'total', header: 'Total Price', width: 16, align: 'right', numFmt: '#,##0.00' },
@@ -1195,9 +1364,7 @@ export async function exportJobTemplateXlsx(
 
     ws.getCell('B8').value = meta.recipientLabel;
     ws.getCell('B8').font = { name: fontName, size: 9, bold: true, color: { argb: 'FF64748B' } };
-    ws.getCell('C8').value = isPO
-      ? includeCurrentData ? job.controls.supplierName : ''
-      : { formula: `IF('PROFORMA INVOICE'!C8="OTHER",'PROFORMA INVOICE'!C9,'PROFORMA INVOICE'!C8)` };
+    ws.getCell('C8').value = { formula: `IF('PROFORMA INVOICE'!C8="OTHER",'PROFORMA INVOICE'!C9,'PROFORMA INVOICE'!C8)` };
     ws.getCell('C8').font = { name: fontName, size: 10, bold: true };
 
     const dsColNum = (key: string) => dsSpecs.findIndex((s) => s.key === key) + 2;
@@ -1246,9 +1413,7 @@ export async function exportJobTemplateXlsx(
         } else if (spec.key === 'grossWt') {
           cell.value = item && item.grossWtKg !== null ? item.grossWtKg : null;
         } else if (spec.key === 'price') {
-          cell.value = isPO
-            ? { formula: `IF('PRICE CALC'!E${r}="","",'PRICE CALC'!E${r})` }
-            : { formula: `IF('PROFORMA INVOICE'!G${r}="","",'PROFORMA INVOICE'!G${r})` };
+          cell.value = { formula: `IF('PROFORMA INVOICE'!G${r}="","",'PROFORMA INVOICE'!G${r})` };
         } else if (spec.key === 'total') {
           cell.value = { formula: `IF(OR(${qtyLet}${r}="",${priceLet}${r}=""),"",${qtyLet}${r}*${priceLet}${r})` };
         }
@@ -1263,26 +1428,6 @@ export async function exportJobTemplateXlsx(
         cell.border = { bottom: thinBorder(theme.excel.borderColor) };
         cell.alignment = { vertical: 'middle', horizontal: spec.align };
       });
-    }
-
-    if (!isLogistics && !isPO) {
-      ws.getCell(38, priceCol).value = 'SUBTOTAL';
-      ws.getCell(38, totalCol).value = { formula: `SUM(${totalLet}17:${totalLet}36)` };
-      ws.getCell(39, priceCol).value = 'FREIGHT';
-      ws.getCell(39, totalCol).value = { formula: "'PROFORMA INVOICE'!H39" };
-      ws.getCell(40, priceCol).value = 'GRAND TOTAL';
-      ws.getCell(40, totalCol).value = { formula: `${totalLet}38+${totalLet}39` };
-      [38, 39, 40].forEach((r) => {
-        ws.getCell(r, totalCol).numFmt = '#,##0.00';
-        ws.getCell(r, priceCol).font = { name: fontName, size: 10, bold: r === 40 };
-        ws.getCell(r, totalCol).font = { name: fontName, size: 10, bold: r === 40 };
-      });
-    } else if (isPO) {
-      ws.getCell(38, priceCol).value = 'TOTAL PO COST';
-      ws.getCell(38, totalCol).value = { formula: `SUM(${totalLet}17:${totalLet}36)` };
-      ws.getCell(38, totalCol).numFmt = '#,##0.00';
-      ws.getCell(38, priceCol).font = { name: fontName, size: 10, bold: true };
-      ws.getCell(38, totalCol).font = { name: fontName, size: 10, bold: true };
     }
   }
 
