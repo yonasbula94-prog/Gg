@@ -1,3 +1,4 @@
+import { RowCopyControls, pickFields } from './RowCopyControls';
 import React, { useState } from 'react';
 import {
   ArrowRight,
@@ -340,6 +341,17 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
         {rowSel.count > 0 && (
           <div className="no-print flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
             <span className="font-semibold text-slate-900">{rowSel.count} row{rowSel.count === 1 ? '' : 's'} selected</span>
+            <RowCopyControls
+              page="INTERNAL_QUOTE"
+              selectedRows={rowSel.selected}
+              disabled={locked}
+              readRow={(rn) =>
+                pickFields(job.items.find((i) => i.rowNumber === rn), [
+                  'requestedDescription', 'offeredDescription', 'uom', 'qty', 'customFields',
+                ])
+              }
+              onPaste={(rows) => rows.forEach((r) => onUpdateItem(r.rowNumber, r.fields))}
+            />
             <select value={bulkUom} onChange={(e) => setBulkUom(e.target.value)} className="min-h-[32px] rounded border border-slate-200 bg-white px-2">
               <option value="">Set UoM…</option>
               {UOM_OPTIONS.map((u) => (<option key={u} value={u}>{u}</option>))}

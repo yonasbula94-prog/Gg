@@ -1,3 +1,4 @@
+import { RowCopyControls, pickFields } from './RowCopyControls';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
@@ -1581,6 +1582,18 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
               {rowSel.count > 0 && !isLocked && (
                 <div className="no-print flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
                   <span className="font-semibold text-slate-900">{rowSel.count} row{rowSel.count === 1 ? '' : 's'} selected</span>
+                  <RowCopyControls
+                    page={`DOC-${prefix}`}
+                    selectedRows={rowSel.selected}
+                    disabled={isLocked}
+                    readRow={(rn) =>
+                      pickFields(job.items.find((i) => i.rowNumber === rn), [
+                        'requestedDescription', 'offeredDescription', 'uom', 'qty', 'customFields',
+                        ...(prefix === 'PL' || prefix === 'DN' ? (['cartonNo', 'netWtKg', 'grossWtKg'] as const) : []),
+                      ])
+                    }
+                    onPaste={(rows) => rows.forEach((r) => onUpdateItem(r.rowNumber, r.fields))}
+                  />
                   <span className="text-slate-300">|</span>
                   <select
                     value={bulkUom}

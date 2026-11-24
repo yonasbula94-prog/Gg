@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useRowSelection } from '../hooks/useRowSelection';
 import { PasteIntoRows } from './PasteIntoRows';
+import { RowCopyControls, pickFields } from './RowCopyControls';
 import { parseFlexibleNumber } from '../utils/supplierQuoteParser';
 import { ArrowRight, Building2, Lock } from 'lucide-react';
 import { MARKUP_RATES } from '../constants/themes';
@@ -491,6 +492,17 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
           {rowSel.count > 0 && (
             <div className="no-print flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
               <span className="font-semibold text-slate-900">{rowSel.count} row{rowSel.count === 1 ? '' : 's'} selected</span>
+              <RowCopyControls
+                page="PRICE_CALC"
+                selectedRows={rowSel.selected}
+                disabled={isIssued}
+                readRow={(rn) =>
+                  pickFields(job.items.find((i) => i.rowNumber === rn), [
+                    'supplierUnitCost', 'boxes', 'boxLengthCm', 'boxWidthCm', 'boxHeightCm', 'kgPerBox',
+                  ])
+                }
+                onPaste={(rows) => rows.forEach((r) => guardItem(r.rowNumber, r.fields))}
+              />
               <span className="text-slate-300">|</span>
               <input
                 type="number"
