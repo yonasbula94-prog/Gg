@@ -87,6 +87,15 @@ export const HelpView: React.FC<HelpViewProps> = ({ initialTopicId, returnLabel,
             <p className="text-xs text-slate-600">{topic.summary}</p>
           </header>
 
+          {topic.id.startsWith('doc-') && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+              <span>Already issued? Changes go through an unlock and a logged revision. This applies to every document.</span>
+              <button type="button" onClick={() => setSelectedId('changing')} className="font-semibold underline cursor-pointer whitespace-nowrap">
+                How to unlock and amend
+              </button>
+            </div>
+          )}
+
           {topic.shots.map((shot) => {
             const src = shotUrl(shot.file);
             if (!src) return null;

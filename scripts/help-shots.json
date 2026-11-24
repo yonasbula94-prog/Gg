@@ -158,9 +158,11 @@
     ]
   },
   {
-    "file": "quotation.jpg",
-    "caption": "Quotation (Master): job controls, preview and issue.",
+    "file": "doc-qt.jpg",
+    "caption": "Quotation (Master): controls, prices and issue.",
     "page": "QT",
+    "zoom": 0.72,
+    "height": 1250,
     "callouts": [
       {
         "n": 1,
@@ -169,34 +171,159 @@
       },
       {
         "n": 2,
-        "find": "A4 Print & Excel Preview",
-        "label": "Check figures"
+        "find": "Payment Terms",
+        "label": "Terms"
       },
       {
         "n": 3,
+        "find": "Unit Price (Col R)",
+        "label": "Prices"
+      },
+      {
+        "n": 4,
+        "find": "A4 Print & Excel Preview",
+        "label": "Check preview"
+      },
+      {
+        "n": 5,
         "find": "Issue Quotation",
         "label": "Issue"
       }
     ]
   },
   {
-    "file": "packing-list.jpg",
-    "caption": "Packing List: packages, cartons and weights.",
+    "file": "doc-pi.jpg",
+    "caption": "Proforma Invoice: checklist, terms and totals.",
+    "page": "PI",
+    "callouts": [
+      {
+        "n": 1,
+        "find": "Customer Quotation (QT) issued first",
+        "label": "Quotation first"
+      },
+      {
+        "n": 2,
+        "find": "Incoterm & Destination",
+        "label": "Incoterm"
+      },
+      {
+        "n": 3,
+        "find": "GRAND TOTAL",
+        "label": "Total"
+      },
+      {
+        "n": 4,
+        "find": "Issue Proforma Invoice",
+        "label": "Issue"
+      }
+    ]
+  },
+  {
+    "file": "doc-po.jpg",
+    "caption": "Supplier PO: supplier details, costs and issue.",
+    "page": "PO",
+    "zoom": 0.72,
+    "height": 1250,
+    "callouts": [
+      {
+        "n": 1,
+        "find": "Supplier Quote Ref.",
+        "label": "Supplier details"
+      },
+      {
+        "n": 2,
+        "find": "Unit Cost (USD)",
+        "label": "Cost per line"
+      },
+      {
+        "n": 3,
+        "find": "TOTAL ORDER COST",
+        "label": "Order total"
+      },
+      {
+        "n": 4,
+        "find": "Issue Supplier PO",
+        "label": "Issue"
+      }
+    ]
+  },
+  {
+    "file": "doc-ci.jpg",
+    "caption": "Commercial Invoice: references, terms and totals.",
+    "page": "CI",
+    "callouts": [
+      {
+        "n": 1,
+        "find": "RFQ / Customer PO",
+        "label": "Customer PO"
+      },
+      {
+        "n": 2,
+        "find": "Payment Terms",
+        "label": "Payment terms"
+      },
+      {
+        "n": 3,
+        "find": "GRAND TOTAL",
+        "label": "Total"
+      },
+      {
+        "n": 4,
+        "find": "Issue Commercial Invoice",
+        "label": "Issue"
+      }
+    ]
+  },
+  {
+    "file": "doc-pl.jpg",
+    "caption": "Packing List: confirmations, packages, cartons and issue.",
     "page": "PL",
     "callouts": [
+      {
+        "n": 1,
+        "find": "1. Payment Completed to Supplier",
+        "label": "Paid"
+      },
+      {
+        "n": 2,
+        "find": "2. Supplier Packing List Received",
+        "label": "Supplier PL"
+      },
       {
         "n": 4,
         "find": "Packages (boxes",
         "label": "Packages"
       },
       {
-        "n": 4,
+        "n": 5,
         "find": "Carton No.",
-        "label": "Carton no."
+        "label": "Cartons"
+      },
+      {
+        "n": 6,
+        "find": "Issue Packing List",
+        "label": "Issue"
+      }
+    ]
+  },
+  {
+    "file": "doc-dn.jpg",
+    "caption": "Delivery Note: delivery details and issue.",
+    "page": "DN",
+    "callouts": [
+      {
+        "n": 2,
+        "find": "Delivery Date",
+        "label": "Delivery date"
+      },
+      {
+        "n": 3,
+        "find": "Transport Ref.",
+        "label": "Transport ref"
       },
       {
         "n": 5,
-        "find": "Issue Packing List",
+        "find": "Issue Delivery Note",
         "label": "Issue"
       }
     ]
