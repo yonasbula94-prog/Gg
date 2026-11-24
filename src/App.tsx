@@ -20,6 +20,9 @@ import {
   Truck,
   X,
 } from 'lucide-react';
+import { CircleHelp } from 'lucide-react';
+import { HelpView } from './components/HelpView';
+import { helpTopicForTab } from './constants/helpTopics';
 import { DOC_META, pageBarColor, resolveThemePalette } from './constants/themes';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { DocumentWorkspaceView } from './components/DocumentWorkspaceView';
@@ -105,6 +108,7 @@ const TAB_LABELS: Record<WorkspaceTab, string> = {
   REGISTRY: 'Master Registry',
   FILES: 'Import & Export',
   STUDIO: 'Clients & Settings',
+  HELP: 'Help & Troubleshooting',
 };
 
 export default function App() {
@@ -144,6 +148,15 @@ export default function App() {
   const [pendingSupplierQuote, setPendingSupplierQuote] = useState<ParsedSupplierQuote | null>(null);
   // Issued-document amendment: one document is unlocked at a time; the snapshot allows discard.
   const [amendment, setAmendment] = useState<{ jobId: string; prefix: DocPrefix; snapshot: ProcurementJob } | null>(null);
+  // Help: remember the page the user came from, so Back returns to it
+  const [helpReturnTab, setHelpReturnTab] = useState<WorkspaceTab>('TRACKER');
+  const [helpTopicId, setHelpTopicId] = useState('overview');
+  const openHelp = () => {
+    if (activeTab !== 'HELP') setHelpReturnTab(activeTab);
+    setHelpTopicId(helpTopicForTab(activeTab === 'HELP' ? helpReturnTab : activeTab));
+    setActiveTab('HELP');
+    setSidebarOpen(false);
+  };
   const [amendDialog, setAmendDialog] = useState<{ mode: "unlock" | "save"; prefix: DocPrefix } | null>(null);
   const quickImportRef = useRef<HTMLInputElement | null>(null);
 
@@ -860,6 +873,7 @@ export default function App() {
         { id: 'REGISTRY', label: 'Master Registry', icon: <Hash className="w-4 h-4" /> },
         { id: 'FILES', label: 'Import & Export', icon: <ArrowLeftRight className="w-4 h-4" /> },
         { id: 'STUDIO', label: 'Clients & Settings', icon: <Settings className="w-4 h-4" /> },
+        { id: 'HELP', label: 'Help & Troubleshooting', icon: <CircleHelp className="w-4 h-4" /> },
       ],
     },
   ];
@@ -966,6 +980,7 @@ export default function App() {
                       key={item.id}
                       type="button"
                       onClick={() => {
+                        if (item.id === 'HELP') return openHelp();
                         setActiveTab(item.id);
                         setSidebarOpen(false);
                       }}
@@ -1043,6 +1058,14 @@ export default function App() {
               onChange={handleQuickExcelOpen}
               className="hidden"
             />
+            <button
+              type="button"
+              onClick={openHelp}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-50 cursor-pointer min-h-[40px] whitespace-nowrap shrink-0"
+            >
+              <CircleHelp className="w-3.5 h-3.5" />
+              <span>Help</span>
+            </button>
             <button
               type="button"
               onClick={() => quickImportRef.current?.click()}
@@ -1152,6 +1175,7 @@ export default function App() {
           {activeTab === 'INTERNAL_QUOTE' && (
             <InternalQuoteView
               job={activeJob}
+              amending={amendingJob}
               calc={calc}
               theme={theme}
               onUpdateSupplierQuote={handleUpdateSupplierQuote}
@@ -1221,6 +1245,17 @@ export default function App() {
               onExportAuditLog={handleExportAuditLog}
               onRequestConfirm={setConfirmDialog}
               onNotify={showToast}
+            />
+          )}
+
+          {activeTab === 'HELP' && (
+            <HelpView
+              key={`${helpTopicId}-${helpReturnTab}`}
+              initialTopicId={helpTopicId}
+              returnLabel={TAB_LABELS[helpReturnTab]}
+              onBack={() => setActiveTab(helpReturnTab)}
+              accentColor={theme.primary}
+              accentText={theme.primaryText}
             />
           )}
 

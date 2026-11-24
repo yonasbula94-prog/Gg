@@ -392,7 +392,10 @@ export async function exportDashboardReportPdf(
     cards.forEach((c, idx) => {
       const cx = MARGIN + idx * (cardW + gap);
       pdf.rect(cx, curY, cardW, cardH, '#FFFFFF', '#CBD5E1', 0.7);
-      pdf.text(c.label, cx + 10, curY + 9, { size: 7.5, bold: true, color: '#64748B', maxWidth: cardW - 20 });
+      // Shrink long labels to fit the card rather than truncating them
+      const labelW = approxTextWidth(c.label, 7.5, true);
+      const labelSize = labelW > cardW - 20 ? Math.max(5.5, (7.5 * (cardW - 20)) / labelW) : 7.5;
+      pdf.text(c.label, cx + 10, curY + 9, { size: labelSize, bold: true, color: '#64748B', maxWidth: cardW - 20 });
       pdf.text(c.value, cx + 10, curY + 23, {
         size: 14,
         bold: true,

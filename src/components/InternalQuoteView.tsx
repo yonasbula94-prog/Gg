@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ArrowRight,
   Calculator,
@@ -8,6 +8,8 @@ import {
   Trash2,
 } from 'lucide-react';
 import { CURRENCY_OPTIONS, INCOTERM_OPTIONS, UOM_OPTIONS } from '../constants/themes';
+import { isJobLocked } from '../utils/amendments';
+import { useRowSelection } from '../hooks/useRowSelection';
 import {
   ConfirmDialogRequest,
   JobCalculationSummary,
@@ -23,6 +25,7 @@ import { HelpTip } from './HelpTip';
 
 interface InternalQuoteViewProps {
   job: ProcurementJob;
+  amending: boolean;
   calc: JobCalculationSummary;
   theme: ThemePalette;
   onUpdateSupplierQuote: (patch: Partial<SupplierQuoteData>) => void;
@@ -43,6 +46,7 @@ function parseOptionalNumber(val: string): number | null {
 
 export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
   job,
+  amending,
   calc,
   theme,
   onUpdateSupplierQuote,
@@ -88,8 +92,19 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
     onNotify('Synced currency and lead time from Internal Supplier Quote to Quotation.');
   };
 
+  // Issued jobs are locked: a disabled fieldset disables every control inside, unless the job is open for amendment
+  const locked = isJobLocked(job) && !amending;
+  const rowSel = useRowSelection<number>();
+  const [bulkUom, setBulkUom] = useState('');
+  const itemRowIds = job.items.filter((it) => it.requestedDescription || it.offeredDescription || (it.qty ?? 0) > 0).map((it) => it.rowNumber);
+  const applyBulkItems = (patch: Partial<JobItemRow>) => rowSel.selected.forEach((rn) => onUpdateItem(rn, patch));
   return (
-    <div className="space-y-6">
+    <fieldset disabled={locked} className="space-y-6 min-w-0 border-0 p-0 m-0">
+      {locked && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900">
+          This job has an issued document, so supplier details and costs are locked. Use Unlock on the document to amend.
+        </div>
+      )}
       {/* Internal Confidentiality Strip & Primary Flow Actions */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-5 py-3.5">
         <div className="flex items-center gap-2.5 min-w-0">
@@ -319,10 +334,26 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
           </div>
         </div>
 
+        {rowSel.count > 0 && (
+          <div className="no-print flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+            <span className="font-semibold text-slate-900">{rowSel.count} row{rowSel.count === 1 ? '' : 's'} selected</span>
+            <select value={bulkUom} onChange={(e) => setBulkUom(e.target.value)} className="min-h-[32px] rounded border border-slate-200 bg-white px-2">
+              <option value="">Set UoM…</option>
+              {UOM_OPTIONS.map((u) => (<option key={u} value={u}>{u}</option>))}
+            </select>
+            <button type="button" disabled={!bulkUom} onClick={() => { applyBulkItems({ uom: bulkUom }); setBulkUom(''); }} className="rounded border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-50 cursor-pointer">Apply UoM</button>
+            <button type="button" onClick={() => applyBulkItems({ offeredDescription: '', uom: '', qty: null, supplierUnitCost: null })} className="rounded border border-red-200 bg-white px-2.5 py-1.5 font-medium text-red-700 hover:bg-red-50 cursor-pointer">Clear selected offers</button>
+            <button type="button" onClick={rowSel.clear} className="ml-auto text-slate-600 underline cursor-pointer">Deselect all</button>
+          </div>
+        )}
+
         <div className="overflow-x-auto sheet-scroll">
           <table className="w-full border-collapse text-xs">
             <thead>
               <tr style={{ backgroundColor: theme.primary, color: theme.primaryText }}>
+                <th className="py-2.5 px-2 text-center w-8">
+                  <input type="checkbox" aria-label="Select all rows" disabled={itemRowIds.length === 0 || locked} checked={rowSel.allChecked(itemRowIds)} onChange={() => rowSel.toggleAll(itemRowIds)} />
+                </th>
                 <th className="py-2.5 px-2.5 text-center font-semibold w-10">#</th>
                 <th className="py-2.5 px-3 text-left font-semibold min-w-[210px]">
                   Client Requested Item
@@ -351,6 +382,9 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
                     style={isAlt ? { backgroundColor: theme.zebraRow } : undefined}
                     className="hover:bg-slate-50/70"
                   >
+                    <td className="py-1.5 px-2 text-center">
+                      <input type="checkbox" aria-label={`Select row ${item.rowNumber}`} disabled={locked || !itemRowIds.includes(item.rowNumber)} checked={rowSel.has(item.rowNumber)} onChange={() => rowSel.toggle(item.rowNumber)} />
+                    </td>
                     <td className="py-1.5 px-2 text-center font-mono-tabular text-slate-400">
                       {idx + 1}
                     </td>
@@ -454,7 +488,7 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
                   color: theme.primary,
                 }}
               >
-                <td colSpan={4} className="py-3 px-4 text-right text-xs uppercase tracking-wide">
+                <td colSpan={5} className="py-3 px-4 text-right text-xs uppercase tracking-wide">
                   Total Supplier Offer Cost
                 </td>
                 <td className="py-3 px-2.5 text-right font-mono-tabular">{calc.totalQty || '—'}</td>
@@ -503,6 +537,6 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
           </button>
         </div>
       </div>
-    </div>
+    </fieldset>
   );
 };

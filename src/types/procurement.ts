@@ -38,7 +38,8 @@ export type WorkspaceTab =
   | 'DN'
   | 'REGISTRY'
   | 'FILES'
-  | 'STUDIO';
+  | 'STUDIO'
+  | 'HELP';
 
 export interface DashboardPreferences {
   showRfqTenderCounters: boolean;
