@@ -73,7 +73,8 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
   };
   const rowSel = useRowSelection<number>();
   const [bulkCost, setBulkCost] = useState('');
-  const selectableRows = calc.rows.filter((r) => !r.isEmpty).map((r) => r.rowNumber);
+  // Every row can be selected, including empty ones (so values can be applied before the description is entered)
+  const selectableRows = calc.rows.map((r) => r.rowNumber);
   const applyBulk = (patch: Partial<JobItemRow>) => {
     rowSel.selected.forEach((rn) => guardItem(rn, patch));
   };
@@ -588,16 +589,21 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                   return (
                     <tr
                       key={row.rowNumber}
+                      onMouseEnter={() => rowSel.dragOver(row.rowNumber)}
                       className={`${isInactive ? 'opacity-50' : ''} hover:bg-slate-50/90 transition-colors`}
                       style={!isInactive && idx % 2 === 1 ? { backgroundColor: theme.zebraRow } : undefined}
                     >
-                      <td className="py-1.5 px-2 text-center">
+                      <td
+                        className="py-1.5 px-2 text-center select-none"
+                        onMouseDown={(e) => {
+                          if (e.button === 0) rowSel.beginDrag(row.rowNumber, selectableRows);
+                        }}
+                      >
                         <input
                           type="checkbox"
                           aria-label={`Select row ${row.rowNumber}`}
-                          disabled={isInactive}
                           checked={rowSel.has(row.rowNumber)}
-                          onChange={() => rowSel.toggle(row.rowNumber)}
+                          onChange={(e) => rowSel.click(row.rowNumber, selectableRows, (e.nativeEvent as MouseEvent).shiftKey)}
                         />
                       </td>
                       <td className="py-1.5 px-2.5 text-center text-slate-400 border-r border-slate-100">

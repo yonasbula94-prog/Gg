@@ -20,7 +20,8 @@ import {
   Truck,
   X,
 } from 'lucide-react';
-import { CircleHelp } from 'lucide-react';
+import { CircleHelp, Redo2, Send, Undo2 } from 'lucide-react';
+import { SupplierRfqView } from './components/SupplierRfqView';
 import { HelpView } from './components/HelpView';
 import { helpTopicForTab } from './constants/helpTopics';
 import { DOC_META, pageBarColor, resolveThemePalette } from './constants/themes';
@@ -83,6 +84,7 @@ import {
   ProcurementJob,
   RegistryEntry,
   SupplierQuoteData,
+  SupplierRfqData,
   ThemeCustomization,
   ThemeVariantId,
   WorkspaceTab,
@@ -97,6 +99,7 @@ import { ParsedSupplierQuote, parseSupplierPdfFile } from './utils/supplierQuote
 
 const TAB_LABELS: Record<WorkspaceTab, string> = {
   TRACKER: 'Dashboard',
+  SUPPLIER_RFQ: 'Supplier RFQ',
   INTERNAL_QUOTE: 'Internal Supplier Quote',
   PRICE_CALC: 'Price Calc (Internal)',
   QT: 'Quotation (Master Controls)',
@@ -216,7 +219,25 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
+  const UNDO_LIMIT = 15;
+  const UNDO_COALESCE_MS = 1500;
+  const undoHistoryRef = useRef<Record<string, { past: ProcurementJob[]; future: ProcurementJob[]; lastEditAt: number }>>({});
+  const [, setHistoryVersion] = useState(0);
+  const historyFor = (jobId: string) => {
+    if (!undoHistoryRef.current[jobId]) undoHistoryRef.current[jobId] = { past: [], future: [], lastEditAt: 0 };
+    return undoHistoryRef.current[jobId];
+  };
+
   const mutateSystemJob = (updater: (job: ProcurementJob) => ProcurementJob) => {
+    const h = historyFor(activeJob.id);
+    const now = Date.now();
+    if (now - h.lastEditAt > UNDO_COALESCE_MS) {
+      h.past.push(activeJob);
+      if (h.past.length > UNDO_LIMIT) h.past.shift();
+      h.future = [];
+      setHistoryVersion((v) => v + 1);
+    }
+    h.lastEditAt = now;
     setJobs((prev) =>
       prev.map((j) =>
         j.id === activeJob.id
@@ -225,6 +246,60 @@ export default function App() {
       )
     );
   };
+
+  const isEditingLocked = () => isJobLocked(activeJob) && amendment?.jobId !== activeJob.id;
+
+  // Undo / redo restore the job's editable content. Issued-document records stay as they are.
+  const restoreJobSnapshot = (snapshot: ProcurementJob) => {
+    setJobs((prev) =>
+      prev.map((j) =>
+        j.id === activeJob.id
+          ? { ...snapshot, issuedDocs: j.issuedDocs, updatedAt: new Date().toISOString() }
+          : j
+      )
+    );
+  };
+
+  const handleUndo = () => {
+    if (isEditingLocked()) return showToast('Issued document is locked. Use Unlock on the document to make changes.');
+    const h = historyFor(activeJob.id);
+    const previous = h.past.pop();
+    if (!previous) return showToast('Nothing to undo for this job.');
+    h.future.push(activeJob);
+    h.lastEditAt = 0;
+    restoreJobSnapshot(previous);
+    setHistoryVersion((v) => v + 1);
+  };
+
+  const handleRedo = () => {
+    if (isEditingLocked()) return showToast('Issued document is locked. Use Unlock on the document to make changes.');
+    const h = historyFor(activeJob.id);
+    const next = h.future.pop();
+    if (!next) return showToast('Nothing to redo for this job.');
+    h.past.push(activeJob);
+    h.lastEditAt = 0;
+    restoreJobSnapshot(next);
+    setHistoryVersion((v) => v + 1);
+  };
+
+  // Ctrl+Z / Ctrl+Y (Cmd on Mac). Inside text fields the browser keeps its own undo.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      const key = e.key.toLowerCase();
+      if (key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   // User edits: blocked on a locked job unless this job is open for amendment.
   const mutateActiveJob = (updater: (job: ProcurementJob) => ProcurementJob) => {
@@ -306,6 +381,39 @@ export default function App() {
       ...j,
       columnOrder: order,
     }));
+  };
+
+  const handleUpdateRfq = (patch: Partial<SupplierRfqData>) => {
+    mutateActiveJob((j) => ({
+      ...j,
+      supplierRfq: {
+        rfqNumber: '',
+        supplierName: '',
+        supplierAddress: '',
+        supplierContact: '',
+        supplierEmail: '',
+        responseDueDate: '',
+        showEndUser: false,
+        sourceName: '',
+        ...j.supplierRfq,
+        ...patch,
+      },
+    }));
+  };
+
+  // Uploaded end-user RFQ lines go into empty rows only, in order. Filled rows are never overwritten.
+  const handleFillEmptyRows = (items: { requestedDescription: string; uom: string; qty: number | null }[]) => {
+    mutateActiveJob((j) => {
+      const queue = [...items];
+      return {
+        ...j,
+        items: j.items.map((it) => {
+          if (queue.length === 0 || it.requestedDescription || it.offeredDescription) return it;
+          const next = queue.shift()!;
+          return { ...it, requestedDescription: next.requestedDescription, offeredDescription: next.requestedDescription, uom: next.uom, qty: next.qty };
+        }),
+      };
+    });
   };
 
   const handleUpdateItem = (rowNumber: number, patch: Partial<JobItemRow>) => {
@@ -858,6 +966,7 @@ export default function App() {
     {
       group: 'Internal Costing',
       items: [
+        { id: 'SUPPLIER_RFQ', label: 'Supplier RFQ', icon: <Send className="w-4 h-4" /> },
         { id: 'INTERNAL_QUOTE', label: 'Internal Quote', icon: <Building2 className="w-4 h-4" /> },
         { id: 'PRICE_CALC', label: 'Price Calc (Internal)', icon: <Calculator className="w-4 h-4" /> },
       ],
@@ -1057,6 +1166,30 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
+            <div className="hidden md:flex items-center gap-1">
+              <button
+                type="button"
+                onClick={handleUndo}
+                disabled={historyFor(activeJob.id).past.length === 0}
+                title={`Undo (Ctrl+Z) · ${historyFor(activeJob.id).past.length} of ${UNDO_LIMIT} steps`}
+                aria-label="Undo"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-40 cursor-pointer min-h-[40px]"
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+                <span>Undo</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleRedo}
+                disabled={historyFor(activeJob.id).future.length === 0}
+                title="Redo (Ctrl+Y)"
+                aria-label="Redo"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-40 cursor-pointer min-h-[40px]"
+              >
+                <Redo2 className="w-3.5 h-3.5" />
+                <span>Redo</span>
+              </button>
+            </div>
             <input
               ref={quickImportRef}
               type="file"
@@ -1174,6 +1307,17 @@ export default function App() {
               onUpdatePrefs={handleUpdateDashboardPrefs}
               onSelectJobAndTab={handleSelectJobAndTab}
               onCreateNewJob={handleCreateNewJob}
+              onNotify={showToast}
+            />
+          )}
+
+          {activeTab === 'SUPPLIER_RFQ' && (
+            <SupplierRfqView
+              job={activeJob}
+              company={company}
+              theme={theme}
+              onUpdateRfq={handleUpdateRfq}
+              onFillEmptyRows={handleFillEmptyRows}
               onNotify={showToast}
             />
           )}

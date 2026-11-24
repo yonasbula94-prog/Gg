@@ -98,7 +98,8 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
   const locked = isJobLocked(job) && !amending;
   const rowSel = useRowSelection<number>();
   const [bulkUom, setBulkUom] = useState('');
-  const itemRowIds = job.items.filter((it) => it.requestedDescription || it.offeredDescription || (it.qty ?? 0) > 0).map((it) => it.rowNumber);
+  // Every row can be selected, including empty rows
+  const itemRowIds = job.items.map((it) => it.rowNumber);
   const applyBulkItems = (patch: Partial<JobItemRow>) => rowSel.selected.forEach((rn) => onUpdateItem(rn, patch));
   return (
     <fieldset disabled={locked} className="space-y-6 min-w-0 border-0 p-0 m-0">
@@ -394,9 +395,15 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
                     key={item.rowNumber}
                     style={isAlt ? { backgroundColor: theme.zebraRow } : undefined}
                     className="hover:bg-slate-50/70"
+                    onMouseEnter={() => rowSel.dragOver(item.rowNumber)}
                   >
-                    <td className="py-1.5 px-2 text-center">
-                      <input type="checkbox" aria-label={`Select row ${item.rowNumber}`} disabled={locked || !itemRowIds.includes(item.rowNumber)} checked={rowSel.has(item.rowNumber)} onChange={() => rowSel.toggle(item.rowNumber)} />
+                    <td
+                      className="py-1.5 px-2 text-center select-none"
+                      onMouseDown={(e) => {
+                        if (e.button === 0 && !locked) rowSel.beginDrag(item.rowNumber, itemRowIds);
+                      }}
+                    >
+                      <input type="checkbox" aria-label={`Select row ${item.rowNumber}`} disabled={locked} checked={rowSel.has(item.rowNumber)} onChange={(e) => rowSel.click(item.rowNumber, itemRowIds, (e.nativeEvent as MouseEvent).shiftKey)} />
                     </td>
                     <td className="py-1.5 px-2 text-center font-mono-tabular text-slate-400">
                       {idx + 1}

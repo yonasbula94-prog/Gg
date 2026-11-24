@@ -719,6 +719,7 @@ export const HELP_TOPICS: HelpTopic[] = [
 /** Which help topic opens for each workspace page */
 const TAB_TOPIC: Record<WorkspaceTab, string> = {
   TRACKER: 'dashboard',
+  SUPPLIER_RFQ: 'overview',
   INTERNAL_QUOTE: 'internalquote',
   PRICE_CALC: 'pricecalc',
   QT: 'doc-qt',

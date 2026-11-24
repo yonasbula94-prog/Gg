@@ -169,7 +169,8 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
   const activeRows = calc.rows.filter((r) => !r.isEmpty);
   const rowSel = useRowSelection<number>();
   const [bulkUom, setBulkUom] = useState('');
-  const selectableRowIds = activeRows.map((r) => r.rowNumber);
+  // Every row can be selected, including empty rows, so values can be applied to rows before they are filled in
+  const selectableRowIds = calc.rows.map((r) => r.rowNumber);
   const applyBulkRows = (patch: Partial<JobItemRow>) => {
     rowSel.selected.forEach((rn) => onUpdateItem(rn, patch));
   };
@@ -1913,14 +1914,20 @@ export const DocumentWorkspaceView: React.FC<DocumentWorkspaceViewProps> = ({
                           key={row.rowNumber}
                           className="hover:bg-slate-50/90 transition-colors"
                           style={idx % 2 === 1 ? { backgroundColor: theme.zebraRow } : undefined}
+                          onMouseEnter={() => rowSel.dragOver(row.rowNumber)}
                         >
-                          <td className="py-1.5 px-2 text-center">
+                          <td
+                            className="py-1.5 px-2 text-center select-none"
+                            onMouseDown={(e) => {
+                              if (e.button === 0 && !isLocked) rowSel.beginDrag(row.rowNumber, selectableRowIds);
+                            }}
+                          >
                             <input
                               type="checkbox"
                               aria-label={`Select row ${row.rowNumber}`}
-                              disabled={row.isEmpty || isLocked}
+                              disabled={isLocked}
                               checked={rowSel.has(row.rowNumber)}
-                              onChange={() => rowSel.toggle(row.rowNumber)}
+                              onChange={(e) => rowSel.click(row.rowNumber, selectableRowIds, (e.nativeEvent as MouseEvent).shiftKey)}
                             />
                           </td>
                           <td className="py-1.5 px-2.5 text-center font-mono-tabular text-slate-400">

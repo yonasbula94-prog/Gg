@@ -23,6 +23,7 @@ export type PlatformMode = 'windows' | 'ipad';
 
 export type WorkspaceTab =
   | 'TRACKER'
+  | 'SUPPLIER_RFQ'
   | 'INTERNAL_QUOTE'
   | 'PRICE_CALC'
   | 'QT'
@@ -258,6 +259,20 @@ export interface AuditEntry {
   to: string;
 }
 
+/** Supplier RFQ: the request sent to suppliers, built from the end-user RFQ */
+export interface SupplierRfqData {
+  rfqNumber: string;
+  supplierName: string;
+  supplierAddress: string;
+  supplierContact: string;
+  supplierEmail: string;
+  responseDueDate: string;
+  /** Off by default: suppliers do not need the end user's name */
+  showEndUser: boolean;
+  /** File the item lines were uploaded from */
+  sourceName: string;
+}
+
 export interface ProcurementJob {
   id: string;
   jobName: string;
@@ -269,6 +284,7 @@ export interface ProcurementJob {
   preparedBy: string;
   controls: JobControls;
   supplierQuote: SupplierQuoteData;
+  supplierRfq?: SupplierRfqData;
   workflow: JobWorkflowState;
   freight: FreightConfig;
   customColumns?: CustomColumnDef[];

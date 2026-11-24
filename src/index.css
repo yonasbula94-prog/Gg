@@ -18,6 +18,23 @@
   }
 }
 
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #rfq-print,
+  #rfq-print * {
+    visibility: visible;
+  }
+  #rfq-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    border: none;
+  }
+}
+
 .font-mono-tabular {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
