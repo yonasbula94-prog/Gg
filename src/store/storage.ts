@@ -22,6 +22,7 @@ import {
   ProcurementJob,
   RegistryEntry,
   SupplierQuoteData,
+  SupplierRfqData,
   ThemeCustomization,
   ThemeVariantId,
 } from '../types/procurement';
@@ -385,6 +386,22 @@ function normalizeContainerCounts(raw: unknown): ContainerCounts | undefined {
   return { c20: pick('c20'), c40: pick('c40'), c40hc: pick('c40hc') };
 }
 
+function normalizeSupplierRfq(raw: unknown): SupplierRfqData | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const str = (v: unknown, max = 200) => (typeof v === 'string' ? v.slice(0, max) : '');
+  return {
+    rfqNumber: str(r.rfqNumber, 60),
+    supplierName: str(r.supplierName),
+    supplierAddress: str(r.supplierAddress, 400),
+    supplierContact: str(r.supplierContact),
+    supplierEmail: str(r.supplierEmail),
+    responseDueDate: /^\d{4}-\d{2}-\d{2}$/.test(str(r.responseDueDate, 10)) ? str(r.responseDueDate, 10) : '',
+    showEndUser: r.showEndUser === true,
+    sourceName: str(r.sourceName, 200),
+  };
+}
+
 export function normalizeJob(raw: unknown): ProcurementJob {
   const fallback = createBlankJob('Procurement Job #1');
   if (!raw || typeof raw !== 'object') return fallback;
@@ -624,6 +641,7 @@ export function normalizeJob(raw: unknown): ProcurementJob {
     customColumns,
     columnOrder,
     items,
+    supplierRfq: normalizeSupplierRfq(src.supplierRfq),
     issuedDocs,
   };
 }

@@ -83,6 +83,27 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
   },
   {
+    id: 'supplierrfq',
+    title: 'Supplier RFQ (send to suppliers)',
+    summary: 'The request for quotation we send to suppliers. It is built from the end-user RFQ items and printed or exported on our letterhead. The end-user name stays hidden unless you turn it on.',
+    keywords: ['supplier rfq', 'request for quotation', 'send to supplier', 'letterhead', 'upload end user rfq'],
+    steps: [
+      'Open Supplier RFQ (Internal Costing, before Internal Quote).',
+      'Enter the supplier name, contact, address, email and the date quotes are due.',
+      'If the items are not in yet, upload the end-user RFQ (.pdf or .xlsx) and press Fill empty rows. Rows that already have items are not changed.',
+      'Check the letter. Print / Save as PDF for the letterhead version, or Export Excel for the workbook.',
+    ],
+    checklist: ['Supplier name and email are filled in', 'Quotes-due date is set', 'End-user name is hidden unless the supplier needs it'],
+    problems: [
+      {
+        symptom: 'Uploaded lines did not all appear',
+        cause: 'Only the empty item rows (17–36) are filled. More lines than empty rows are skipped.',
+        fix: 'Clear rows you no longer need or split the RFQ into two jobs.',
+      },
+    ],
+    shots: [],
+  },
+  {
     id: 'internalquote',
     title: 'Internal Quote: the supplier offer',
     summary: 'Records what the supplier offers. Costs entered here feed Price Calc.',
@@ -719,6 +740,7 @@ export const HELP_TOPICS: HelpTopic[] = [
 /** Which help topic opens for each workspace page */
 const TAB_TOPIC: Record<WorkspaceTab, string> = {
   TRACKER: 'dashboard',
+  SUPPLIER_RFQ: 'supplierrfq',
   INTERNAL_QUOTE: 'internalquote',
   PRICE_CALC: 'pricecalc',
   QT: 'doc-qt',

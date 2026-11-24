@@ -1,3 +1,4 @@
+import { RowCopyControls, pickFields } from './RowCopyControls';
 import React, { useState } from 'react';
 import {
   ArrowRight,
@@ -98,7 +99,8 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
   const locked = isJobLocked(job) && !amending;
   const rowSel = useRowSelection<number>();
   const [bulkUom, setBulkUom] = useState('');
-  const itemRowIds = job.items.filter((it) => it.requestedDescription || it.offeredDescription || (it.qty ?? 0) > 0).map((it) => it.rowNumber);
+  // Every row can be selected, including empty rows
+  const itemRowIds = job.items.map((it) => it.rowNumber);
   const applyBulkItems = (patch: Partial<JobItemRow>) => rowSel.selected.forEach((rn) => onUpdateItem(rn, patch));
   return (
     <fieldset disabled={locked} className="space-y-6 min-w-0 border-0 p-0 m-0">
@@ -339,6 +341,17 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
         {rowSel.count > 0 && (
           <div className="no-print flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
             <span className="font-semibold text-slate-900">{rowSel.count} row{rowSel.count === 1 ? '' : 's'} selected</span>
+            <RowCopyControls
+              page="INTERNAL_QUOTE"
+              selectedRows={rowSel.selected}
+              disabled={locked}
+              readRow={(rn) =>
+                pickFields(job.items.find((i) => i.rowNumber === rn), [
+                  'requestedDescription', 'offeredDescription', 'uom', 'qty', 'customFields',
+                ])
+              }
+              onPaste={(rows) => rows.forEach((r) => onUpdateItem(r.rowNumber, r.fields))}
+            />
             <select value={bulkUom} onChange={(e) => setBulkUom(e.target.value)} className="min-h-[32px] rounded border border-slate-200 bg-white px-2">
               <option value="">Set UoM…</option>
               {UOM_OPTIONS.map((u) => (<option key={u} value={u}>{u}</option>))}
@@ -394,9 +407,15 @@ export const InternalQuoteView: React.FC<InternalQuoteViewProps> = ({
                     key={item.rowNumber}
                     style={isAlt ? { backgroundColor: theme.zebraRow } : undefined}
                     className="hover:bg-slate-50/70"
+                    onMouseEnter={() => rowSel.dragOver(item.rowNumber)}
                   >
-                    <td className="py-1.5 px-2 text-center">
-                      <input type="checkbox" aria-label={`Select row ${item.rowNumber}`} disabled={locked || !itemRowIds.includes(item.rowNumber)} checked={rowSel.has(item.rowNumber)} onChange={() => rowSel.toggle(item.rowNumber)} />
+                    <td
+                      className="py-1.5 px-2 text-center select-none"
+                      onMouseDown={(e) => {
+                        if (e.button === 0 && !locked) rowSel.beginDrag(item.rowNumber, itemRowIds);
+                      }}
+                    >
+                      <input type="checkbox" aria-label={`Select row ${item.rowNumber}`} disabled={locked} checked={rowSel.has(item.rowNumber)} onChange={(e) => rowSel.click(item.rowNumber, itemRowIds, (e.nativeEvent as MouseEvent).shiftKey)} />
                     </td>
                     <td className="py-1.5 px-2 text-center font-mono-tabular text-slate-400">
                       {idx + 1}

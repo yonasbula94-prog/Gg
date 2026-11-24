@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { useRowSelection } from '../hooks/useRowSelection';
 import { PasteIntoRows } from './PasteIntoRows';
+import { useCellRange } from '../hooks/useCellRange';
+import { parseFlexibleNumber as parseNumberForRange } from '../utils/supplierQuoteParser';
+import { RowCopyControls, pickFields } from './RowCopyControls';
 import { parseFlexibleNumber } from '../utils/supplierQuoteParser';
 import { ArrowRight, Building2, Lock } from 'lucide-react';
 import { MARKUP_RATES } from '../constants/themes';
@@ -73,7 +76,31 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
   };
   const rowSel = useRowSelection<number>();
   const [bulkCost, setBulkCost] = useState('');
-  const selectableRows = calc.rows.filter((r) => !r.isEmpty).map((r) => r.rowNumber);
+  // Every row can be selected, including empty ones (so values can be applied before the description is entered)
+  const selectableRows = calc.rows.map((r) => r.rowNumber);
+  // Free cell-range selection: table cell index -> editable item field
+  const priceFieldAt: Record<number, keyof JobItemRow> = {
+    4: 'boxes',
+    5: 'boxLengthCm',
+    6: 'boxWidthCm',
+    7: 'boxHeightCm',
+    9: 'kgPerBox',
+    11: 'supplierUnitCost',
+  };
+  const cellRange = useCellRange({
+    tableKey: 'price-calc',
+    rowOrder: calc.rows.map((r) => r.rowNumber),
+    fieldAt: (ci) => (priceFieldAt[ci] ? (priceFieldAt[ci] as string) : null),
+    readCell: (rn, field) => {
+      const item = job.items.find((i) => i.rowNumber === rn);
+      const v = item ? (item as unknown as Record<string, unknown>)[field] : null;
+      return v === null || v === undefined ? '' : String(v);
+    },
+    writeCell: (rn, field, text) => {
+      const n = parseNumberForRange(text);
+      guardItem(rn, { [field]: n } as Partial<JobItemRow>);
+    },
+  });
   const applyBulk = (patch: Partial<JobItemRow>) => {
     rowSel.selected.forEach((rn) => guardItem(rn, patch));
   };
@@ -490,6 +517,17 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
           {rowSel.count > 0 && (
             <div className="no-print flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
               <span className="font-semibold text-slate-900">{rowSel.count} row{rowSel.count === 1 ? '' : 's'} selected</span>
+              <RowCopyControls
+                page="PRICE_CALC"
+                selectedRows={rowSel.selected}
+                disabled={isIssued}
+                readRow={(rn) =>
+                  pickFields(job.items.find((i) => i.rowNumber === rn), [
+                    'supplierUnitCost', 'boxes', 'boxLengthCm', 'boxWidthCm', 'boxHeightCm', 'kgPerBox',
+                  ])
+                }
+                onPaste={(rows) => rows.forEach((r) => guardItem(r.rowNumber, r.fields))}
+              />
               <span className="text-slate-300">|</span>
               <input
                 type="number"
@@ -545,7 +583,7 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
           )}
 
           <div className="overflow-x-auto sheet-scroll">
-            <table className="w-full border-collapse text-xs">
+            <table className="w-full border-collapse text-xs" data-range-table="price-calc">
               <thead>
                 <tr style={{ backgroundColor: theme.primary, color: theme.primaryText }}>
                   <th className="py-2.5 px-2 text-center w-8">
@@ -588,16 +626,30 @@ export const PriceCalcView: React.FC<PriceCalcViewProps> = ({
                   return (
                     <tr
                       key={row.rowNumber}
+                      onMouseEnter={() => rowSel.dragOver(row.rowNumber)}
+                      onMouseDown={(e) => {
+                        const td = (e.target as HTMLElement).closest('td');
+                        if (td) cellRange.onCellDown(row.rowNumber, td.cellIndex, e);
+                      }}
+                      onMouseOver={(e) => {
+                        const td = (e.target as HTMLElement).closest('td');
+                        if (td) cellRange.onCellOver(row.rowNumber, td.cellIndex);
+                      }}
+                      data-row-number={row.rowNumber}
                       className={`${isInactive ? 'opacity-50' : ''} hover:bg-slate-50/90 transition-colors`}
                       style={!isInactive && idx % 2 === 1 ? { backgroundColor: theme.zebraRow } : undefined}
                     >
-                      <td className="py-1.5 px-2 text-center">
+                      <td
+                        className="py-1.5 px-2 text-center select-none"
+                        onMouseDown={(e) => {
+                          if (e.button === 0) rowSel.beginDrag(row.rowNumber, selectableRows);
+                        }}
+                      >
                         <input
                           type="checkbox"
                           aria-label={`Select row ${row.rowNumber}`}
-                          disabled={isInactive}
                           checked={rowSel.has(row.rowNumber)}
-                          onChange={() => rowSel.toggle(row.rowNumber)}
+                          onChange={(e) => rowSel.click(row.rowNumber, selectableRows, (e.nativeEvent as MouseEvent).shiftKey)}
                         />
                       </td>
                       <td className="py-1.5 px-2.5 text-center text-slate-400 border-r border-slate-100">

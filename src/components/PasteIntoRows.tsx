@@ -25,6 +25,7 @@ export const PasteIntoRows: React.FC<PasteIntoRowsProps> = ({ fields, rowIds, di
   const [manual, setManual] = useState('');
   const [needsManual, setNeedsManual] = useState(false);
   const [message, setMessage] = useState('');
+  const [typed, setTyped] = useState('');
 
   const field = fields.find((f) => f.key === fieldKey) ?? fields[0];
 
@@ -108,6 +109,33 @@ export const PasteIntoRows: React.FC<PasteIntoRowsProps> = ({ fields, rowIds, di
           </button>
         </span>
       )}
+      <span className="flex items-center gap-2">
+        <input
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && typed.trim()) {
+              apply(typed);
+              setTyped('');
+            }
+          }}
+          disabled={disabled}
+          placeholder={`Type a ${field?.label ?? 'value'} for all selected`}
+          aria-label="Value to apply to selected rows"
+          className="min-h-[32px] w-56 rounded border border-slate-200 bg-white px-2 disabled:opacity-50"
+        />
+        <button
+          type="button"
+          disabled={disabled || rowIds.length === 0 || !typed.trim()}
+          onClick={() => {
+            apply(typed);
+            setTyped('');
+          }}
+          className="rounded border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-50 cursor-pointer"
+        >
+          Apply to selected
+        </button>
+      </span>
       {message && <span className="text-slate-600">{message}</span>}
     </div>
   );
