@@ -256,6 +256,19 @@ function getContrastTextHex(hex: string): string {
   return luminance > 0.62 ? '#0F172A' : '#FFFFFF';
 }
 
+/** WCAG contrast ratio between two #RRGGBB colours (1 to 21). */
+export function contrastRatio(a: string, b: string): number {
+  const lum = (hex: string) => {
+    const channel = (i: number) => {
+      const c = parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * channel(0) + 0.7152 * channel(1) + 0.0722 * channel(2);
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
 export function resolveThemePalette(
   themeId: ThemeVariantId,
   custom?: ThemeCustomization | null

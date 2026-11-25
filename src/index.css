@@ -1,6 +1,12 @@
 @import "tailwindcss";
 
 @layer base {
+  /* Keyboard focus is always visible (fixed high-contrast ring, independent of the theme colour) */
+  :where(button, a, [role="button"], select, [tabindex]):focus-visible {
+    outline: 2px solid #1d4ed8;
+    outline-offset: 2px;
+  }
+
   :root {
     --font-display: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
     --font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
