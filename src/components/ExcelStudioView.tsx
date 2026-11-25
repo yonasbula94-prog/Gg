@@ -17,7 +17,7 @@ import {
   Unlock,
   Upload,
 } from 'lucide-react';
-import { DOCUMENT_FONT_OPTIONS, EXCEL_THEMES, SAFE_FONT_NAME } from '../constants/themes';
+import { contrastRatio, DOCUMENT_FONT_OPTIONS, EXCEL_THEMES, SAFE_FONT_NAME } from '../constants/themes';
 import {
   hasCustomAdminPassword,
   saveCompanyProfile,
@@ -229,6 +229,24 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
     };
     reader.readAsDataURL(file);
     if (logoInputRef.current) logoInputRef.current.value = '';
+  };
+
+  // WCAG checks for the colours that carry text or highlights (AA: 4.5:1 text, 3:1 graphics and focus)
+  const contrastChecks = (key: string): { label: string; fg: string; bg: string; min: number }[] => {
+    const bestText = contrastRatio(theme.accent, '#FFFFFF') >= contrastRatio(theme.accent, '#0F172A') ? '#FFFFFF' : '#0F172A';
+    switch (key) {
+      case 'primary':
+        return [{ label: 'Header text on banner', fg: theme.primaryText, bg: theme.primary, min: 4.5 }];
+      case 'accent':
+        return [
+          { label: 'Button text on accent', fg: bestText, bg: theme.accent, min: 4.5 },
+          { label: 'Accent on page background', fg: theme.accent, bg: theme.secondaryBg, min: 3 },
+        ];
+      case 'bodyText':
+        return [{ label: 'Body text on white', fg: theme.bodyText, bg: '#FFFFFF', min: 4.5 }];
+      default:
+        return [];
+    }
   };
 
   const colorPickers: {
@@ -911,6 +929,19 @@ export const ExcelStudioView: React.FC<ExcelStudioViewProps> = ({
                           <span className="truncate">{cp.label}</span>
                           <HelpTip text={cp.help} />
                         </label>
+                        {contrastChecks(cp.key).map((check) => {
+                          const ratio = contrastRatio(check.fg, check.bg);
+                          const ok = ratio >= check.min;
+                          return (
+                            <p
+                              key={check.label}
+                              className={`text-[11px] ${ok ? 'text-slate-600' : 'text-amber-800 font-medium'}`}
+                            >
+                              {ok ? '✓' : '⚠'} {check.label}: {ratio.toFixed(1)}:1
+                              {ok ? '' : ` (needs ${check.min}:1; choose a ${check.fg === theme.accent || check.bg === theme.accent ? 'stronger' : 'darker or lighter'} shade)`}
+                            </p>
+                          );
+                        })}
                         <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/60 px-2.5 py-1.5 min-h-[42px]">
                           <input
                             type="color"
