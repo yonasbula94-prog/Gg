@@ -5,7 +5,7 @@
     }
   },
   "firestore": {
-    "database": "(default)",
+    "database": "ai-studio-grandgroupfzcpro-54b3920d-5cb6-432a-9814-6fa8f25c3ed3",
     "rules": "firestore.rules"
   }
 }
