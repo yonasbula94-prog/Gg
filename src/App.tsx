@@ -1,26 +1,70 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import {
   ArrowLeftRight,
   Building2,
   Calculator,
+  CircleHelp,
   FileSpreadsheet,
   FileText,
   FolderOpen,
   Hash,
+  KeyRound,
   LayoutDashboard,
+  Lock,
+  LogIn,
+  LogOut,
   Menu,
   Monitor,
   Package,
   Plus,
+  Radio,
   Receipt,
+  Redo2,
+  Send,
   Settings,
+  ShieldAlert,
   ShoppingCart,
   Tablet,
   Trash2,
   Truck,
+  Undo2,
+  Unlock,
+  Users,
   X,
 } from 'lucide-react';
-import { CircleHelp, Redo2, Send, Undo2 } from 'lucide-react';
+import { auth, googleAuthProvider } from './lib/firebase';
+import {
+  amendOrgDocument,
+  ApiError,
+  deleteOrgJob,
+  fetchOrgAuditLog,
+  fetchOrgWorkspace,
+  fetchSessionBootstrap,
+  issueOrgDocument,
+  saveOrgJob,
+  updateOrgSettings,
+  voidOrgRegistryEntry,
+} from './lib/apiClient';
+import { AuthGateView } from './components/AuthGateView';
+import { ExecutiveLiveView } from './components/ExecutiveLiveView';
+import { OrgAdminView } from './components/OrgAdminView';
+import { VendorLicenseConsoleView } from './components/VendorLicenseConsoleView';
+import { useExecutiveStream } from './hooks/useExecutiveStream';
+import {
+  enqueueOfflineMutation,
+  flushOfflineOutbox,
+  loadOfflineOutbox,
+  loadOrgCacheSnapshot,
+  saveOrgCacheSnapshot,
+} from './utils/offlineSync';
+import {
+  ROLE_LABELS,
+  type AuthUserProfile,
+  type OfflineLeaseToken,
+  type OrganizationSummary,
+  type PendingInvite,
+} from './types/enterprise';
 import { SupplierRfqView } from './components/SupplierRfqView';
 import { applyPageSnapshot, undoPageKey } from './utils/pageUndo';
 import { HelpView } from './components/HelpView';
@@ -99,6 +143,7 @@ import { detectDefaultPlatform, savePlatformMode } from './utils/platform';
 import { ParsedSupplierQuote, parseSupplierPdfFile } from './utils/supplierQuoteParser';
 
 const TAB_LABELS: Record<WorkspaceTab, string> = {
+  EXECUTIVE: 'Executive Live Dashboard',
   TRACKER: 'Dashboard',
   SUPPLIER_RFQ: 'Supplier RFQ',
   INTERNAL_QUOTE: 'Internal Supplier Quote',
@@ -112,6 +157,8 @@ const TAB_LABELS: Record<WorkspaceTab, string> = {
   REGISTRY: 'Master Registry',
   FILES: 'Import & Export',
   STUDIO: 'Clients & Settings',
+  ORG_ADMIN: 'Organization & Seats',
+  VENDOR_LICENSES: 'Vendor License Console',
   HELP: 'Help & Troubleshooting',
 };
 
@@ -176,40 +223,358 @@ export default function App() {
     [themeId, themeCustomization]
   );
 
-  const showToast = (msg: string) => {
+  // ==================== MULTI-USER AUTH & ORGANIZATION STATE ====================
+  const [authReady, setAuthReady] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authUser, setAuthUser] = useState<AuthUserProfile | null>(null);
+  const [organizations, setOrganizations] = useState<OrganizationSummary[]>([]);
+  const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
+  const [activeOrgId, setActiveOrgId] = useState<string | null>(null);
+  const [localStandaloneMode, setLocalStandaloneMode] = useState(false);
+  const [onboardingVendorOpen, setOnboardingVendorOpen] = useState(false);
+  const [offlineLease, setOfflineLease] = useState<OfflineLeaseToken | null>(null);
+  const [pendingOutboxCount, setPendingOutboxCount] = useState(0);
+  const [syncConflict, setSyncConflict] = useState<{
+    jobId: string;
+    localJob: ProcurementJob;
+    serverJob: ProcurementJob;
+    message: string;
+  } | null>(null);
+  const [executiveSafeMode, setExecutiveSafeMode] = useState(false);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+
+  const activeOrg = useMemo(() => {
+    const list = Array.isArray(organizations) ? organizations : [];
+    return list.find((o) => o && o.id === activeOrgId) || null;
+  }, [organizations, activeOrgId]);
+  const isCloudMode = Boolean(!localStandaloneMode && authUser && activeOrg);
+  const isReadOnlyRole = Boolean(
+    isCloudMode &&
+      activeOrg &&
+      (activeOrg.role === 'VIEWER' ||
+        activeOrg.licenseExpired ||
+        ((activeOrg.role === 'CEO_EXECUTIVE' || activeOrg.role === 'ORG_ADMIN') &&
+          executiveSafeMode))
+  );
+
+  // Refs to prevent remote stream updates from re-triggering saves
+  const suppressCloudSaveRef = useRef(false);
+  const jobSaveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  const showToast = useCallback((msg: string) => {
     setToast(msg);
+  }, []);
+
+  const loadOrganizationWorkspace = useCallback(
+    async (org: OrganizationSummary) => {
+      setWorkspaceLoading(true);
+      try {
+        const snap = await fetchOrgWorkspace(org.id);
+        suppressCloudSaveRef.current = true;
+        saveOrgCacheSnapshot(org.id, snap);
+        setOfflineLease(snap.offlineLease);
+        setOrganizations((prev) =>
+          (Array.isArray(prev) ? prev : []).map((o) =>
+            o && o.id === snap.organization.id ? snap.organization : o
+          )
+        );
+        const hydratedJobs =
+          snap.jobs.length > 0
+            ? snap.jobs.map((j) => normalizeJob(j))
+            : [createBlankJob('Procurement Job #1', snap.companyProfile)];
+        setJobs(hydratedJobs);
+        setActiveJobId((prevId) =>
+          hydratedJobs.some((j) => j.id === prevId) ? prevId : hydratedJobs[0].id
+        );
+        setRegistry(normalizeRegistryEntries(snap.registry));
+        setCompany(normalizeCompanyProfile(snap.companyProfile));
+        setThemeId(snap.themeVariant);
+        setThemeCustomization(normalizeThemeCustomization(snap.themeCustomization));
+        setDashboardPrefs(snap.dashboardPrefs);
+        setPendingOutboxCount(loadOfflineOutbox(org.id).length);
+
+        if (snap.organization.role === 'CEO_EXECUTIVE') {
+          setExecutiveSafeMode(true);
+          setActiveTab('EXECUTIVE');
+        } else if (snap.organization.licenseExpired && snap.organization.role === 'ORG_ADMIN') {
+          setActiveTab('ORG_ADMIN');
+        }
+        setTimeout(() => {
+          suppressCloudSaveRef.current = false;
+        }, 120);
+      } catch (err) {
+        // Offline resilience: fall back to validated 7-day cached snapshot if available
+        const cached = loadOrgCacheSnapshot(org.id);
+        if (cached) {
+          suppressCloudSaveRef.current = true;
+          setOfflineLease(cached.offlineLease);
+          const hydratedJobs =
+            cached.jobs.length > 0
+              ? cached.jobs.map((j) => normalizeJob(j))
+              : [createBlankJob('Procurement Job #1', cached.companyProfile)];
+          setJobs(hydratedJobs);
+          setActiveJobId(hydratedJobs[0].id);
+          setRegistry(normalizeRegistryEntries(cached.registry));
+          setCompany(normalizeCompanyProfile(cached.companyProfile));
+          setThemeId(cached.themeVariant);
+          setThemeCustomization(normalizeThemeCustomization(cached.themeCustomization));
+          setDashboardPrefs(cached.dashboardPrefs);
+          setPendingOutboxCount(loadOfflineOutbox(org.id).length);
+          setToast(
+            `Offline cache loaded (signed lease valid until ${cached.offlineLease.expiresAt.slice(0, 10)}). Draft edits will queue and sync on reconnect.`
+          );
+          setTimeout(() => {
+            suppressCloudSaveRef.current = false;
+          }, 120);
+        } else {
+          setToast(
+            err instanceof Error
+              ? err.message
+              : 'Could not load organization workspace from server.'
+          );
+        }
+      } finally {
+        setWorkspaceLoading(false);
+      }
+    },
+    []
+  );
+
+  const bootstrapSession = useCallback(async () => {
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      const session = await fetchSessionBootstrap();
+      if (!session || !session.user || !Array.isArray(session.organizations)) {
+        throw new Error('Workspace session response was incomplete. Please sign in again.');
+      }
+      const nextOrgs = session.organizations.filter(
+        (o): o is OrganizationSummary => Boolean(o && typeof o.id === 'string')
+      );
+      const nextInvites = Array.isArray(session.pendingInvites) ? session.pendingInvites : [];
+      setAuthUser(session.user);
+      setOrganizations(nextOrgs);
+      setPendingInvites(nextInvites);
+      if (nextOrgs.length > 0) {
+        const chosen = nextOrgs[0];
+        setActiveOrgId(chosen.id);
+        setLocalStandaloneMode(false);
+        await loadOrganizationWorkspace(chosen);
+      } else {
+        setActiveOrgId(null);
+      }
+    } catch (err) {
+      setAuthError(
+        err instanceof Error ? err.message : 'Could not verify your workspace session.'
+      );
+    } finally {
+      setAuthLoading(false);
+      setAuthReady(true);
+    }
+  }, [loadOrganizationWorkspace]);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (fbUser) => {
+      if (fbUser) {
+        await bootstrapSession();
+      } else {
+        setAuthUser(null);
+        setOrganizations([]);
+        setPendingInvites([]);
+        setActiveOrgId(null);
+        setAuthReady(true);
+      }
+    });
+    return () => unsub();
+  }, [bootstrapSession]);
+
+  const handleGoogleSignIn = async () => {
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      await signInWithPopup(auth, googleAuthProvider);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Google Sign-In was cancelled or failed.');
+      setAuthLoading(false);
+    }
   };
 
-  useEffect(() => {
-    if (!saveJobs(jobs)) {
-      setToast('Local storage is nearly full. Export a JSON Backup in Import & Export to safeguard your jobs.');
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+      setActiveOrgId(null);
+      setAuthUser(null);
+      setOrganizations([]);
+      setPendingInvites([]);
+      setLocalStandaloneMode(false);
+      setOnboardingVendorOpen(false);
+    } catch {
+      showToast('Could not sign out cleanly.');
     }
-  }, [jobs]);
+  };
+
+  const handleFlushOfflineOutbox = useCallback(async () => {
+    if (!activeOrgId || !isCloudMode) return;
+    const result = await flushOfflineOutbox(activeOrgId);
+    setPendingOutboxCount(result.remaining.length);
+    if (result.conflicts.length > 0) {
+      setSyncConflict(result.conflicts[0]);
+      showToast('A sync conflict was detected. Review the banner to choose which version to keep.');
+    } else if (result.syncedCount > 0) {
+      showToast(`Synced ${result.syncedCount} queued offline change(s) to the cloud workspace.`);
+    }
+  }, [activeOrgId, isCloudMode, showToast]);
 
   useEffect(() => {
-    if (!saveRegistry(registry)) {
-      setToast('Local storage is nearly full. Export Master_Registry.xlsx or JSON Backup to protect records.');
+    if (!isCloudMode || !activeOrgId) return;
+    const onOnline = () => {
+      handleFlushOfflineOutbox();
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [isCloudMode, activeOrgId, handleFlushOfflineOutbox]);
+
+  const queueCloudJobSync = useCallback(
+    (jobToSync: ProcurementJob, options?: { immediate?: boolean; auditReason?: string; forceOverwrite?: boolean }) => {
+      if (!isCloudMode || !activeOrgId || suppressCloudSaveRef.current) return;
+
+      const execute = async () => {
+        try {
+          const res = await saveOrgJob(activeOrgId, jobToSync, {
+            baseVersion: jobToSync.version,
+            forceOverwrite: options?.forceOverwrite,
+            auditReason: options?.auditReason,
+          });
+          setJobs((prev) =>
+            prev.map((j) => (j.id === res.job.id ? { ...j, version: res.version } : j))
+          );
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 409) {
+            const data = err.data as { serverJob?: ProcurementJob } | undefined;
+            if (data?.serverJob) {
+              setSyncConflict({
+                jobId: jobToSync.id,
+                localJob: jobToSync,
+                serverJob: normalizeJob(data.serverJob),
+                message: err.message,
+              });
+              return;
+            }
+          }
+          const updatedQueue = enqueueOfflineMutation(activeOrgId, {
+            kind: 'upsert_job',
+            jobId: jobToSync.id,
+            payload: jobToSync,
+          });
+          setPendingOutboxCount(updatedQueue.length);
+        }
+      };
+
+      const existingTimer = jobSaveTimersRef.current.get(jobToSync.id);
+      if (existingTimer) clearTimeout(existingTimer);
+
+      if (options?.immediate) {
+        jobSaveTimersRef.current.delete(jobToSync.id);
+        void execute();
+      } else {
+        const t = setTimeout(() => {
+          jobSaveTimersRef.current.delete(jobToSync.id);
+          void execute();
+        }, 650);
+        jobSaveTimersRef.current.set(jobToSync.id, t);
+      }
+    },
+    [isCloudMode, activeOrgId]
+  );
+
+  // Real-time SSE Live Stream for CEO Executive Dashboard & Multi-User Workspace Sync
+  const executiveStream = useExecutiveStream({
+    orgId: activeOrgId,
+    enabled: Boolean(isCloudMode && activeOrg && !activeOrg.licenseExpired),
+    onRemoteJobUpdated: (remoteJob, updatedByUid) => {
+      if (updatedByUid && authUser && updatedByUid === authUser.uid) return;
+      const norm = normalizeJob(remoteJob);
+      setJobs((prev) => {
+        const exists = prev.some((j) => j.id === norm.id);
+        return exists ? prev.map((j) => (j.id === norm.id ? norm : j)) : [norm, ...prev];
+      });
+    },
+    onRemoteJobDeleted: (deletedJobId, deletedByUid) => {
+      if (deletedByUid && authUser && deletedByUid === authUser.uid) return;
+      setJobs((prev) => {
+        const filtered = prev.filter((j) => j.id !== deletedJobId);
+        return filtered.length > 0 ? filtered : prev;
+      });
+    },
+    onRemoteDocIssued: (remoteJob, regEntry) => {
+      const norm = normalizeJob(remoteJob);
+      setJobs((prev) => prev.map((j) => (j.id === norm.id ? norm : j)));
+      setRegistry((prev) => mergeRegistryEntries(prev, [regEntry]));
+    },
+    onRemoteRegistryVoided: (docNumber, voidReason) => {
+      setRegistry((prev) =>
+        prev.map((e) => (e.docNumber === docNumber ? { ...e, status: 'VOID', voidReason } : e))
+      );
+    },
+    onSeatRevoked: (reason) => {
+      showToast(reason);
+      setActiveOrgId(null);
+      void bootstrapSession();
+    },
+  });
+
+  useEffect(() => {
+    if (localStandaloneMode) {
+      if (!saveJobs(jobs)) {
+        setToast('Local storage is nearly full. Export a JSON Backup in Import & Export to safeguard your jobs.');
+      }
     }
-  }, [registry]);
+  }, [jobs, localStandaloneMode]);
+
+  useEffect(() => {
+    if (localStandaloneMode) {
+      if (!saveRegistry(registry)) {
+        setToast('Local storage is nearly full. Export Master_Registry.xlsx or JSON Backup to protect records.');
+      }
+    }
+  }, [registry, localStandaloneMode]);
 
   useEffect(() => {
     const purged = purgeRevisionHistory(jobs);
     if (purged !== jobs) setJobs(purged);
   }, [jobs]);
 
-  useEffect(() => saveThemeVariant(themeId), [themeId]);
   useEffect(() => {
-    saveThemeCustomization(themeCustomization);
-  }, [themeCustomization]);
+    if (localStandaloneMode) saveThemeVariant(themeId);
+    else if (isCloudMode && activeOrgId && !suppressCloudSaveRef.current) {
+      updateOrgSettings(activeOrgId, { themeVariant: themeId }).catch(() => {});
+    }
+  }, [themeId, localStandaloneMode, isCloudMode, activeOrgId]);
 
   useEffect(() => {
-    if (!saveCompanyProfile(company)) {
-      setToast('Could not save company settings (logo image may be too large for browser storage).');
+    if (localStandaloneMode) saveThemeCustomization(themeCustomization);
+    else if (isCloudMode && activeOrgId && !suppressCloudSaveRef.current) {
+      updateOrgSettings(activeOrgId, { themeCustomization }).catch(() => {});
     }
-  }, [company]);
+  }, [themeCustomization, localStandaloneMode, isCloudMode, activeOrgId]);
+
+  useEffect(() => {
+    if (localStandaloneMode) {
+      if (!saveCompanyProfile(company)) {
+        setToast('Could not save company settings (logo image may be too large for browser storage).');
+      }
+    }
+  }, [company, localStandaloneMode]);
 
   useEffect(() => savePlatformMode(platformMode), [platformMode]);
-  useEffect(() => saveDashboardPrefs(dashboardPrefs), [dashboardPrefs]);
+  useEffect(() => {
+    if (localStandaloneMode) saveDashboardPrefs(dashboardPrefs);
+    else if (isCloudMode && activeOrgId && !suppressCloudSaveRef.current) {
+      updateOrgSettings(activeOrgId, { dashboardPrefs }).catch(() => {});
+    }
+  }, [dashboardPrefs, localStandaloneMode, isCloudMode, activeOrgId]);
+
   useEffect(() => {
     if (activeJob?.id) saveActiveJobId(activeJob.id);
   }, [activeJob?.id]);
@@ -231,7 +596,15 @@ export default function App() {
 
   const currentUndoKey = () => `${activeJob.id}|${undoPageKey(activeTab)}`;
 
-  const mutateSystemJob = (updater: (job: ProcurementJob) => ProcurementJob) => {
+  const mutateSystemJob = (updater: (job: ProcurementJob) => ProcurementJob, options?: { skipCloudSync?: boolean; auditReason?: string }) => {
+    if (isReadOnlyRole) {
+      showToast(
+        executiveSafeMode
+          ? 'Safe Read-Only Mode is ON. Switch to Full Edit Access in the toolbar to modify jobs.'
+          : 'Your current seat or license state is read-only.'
+      );
+      return;
+    }
     const h = historyFor(currentUndoKey());
     const now = Date.now();
     if (now - h.lastEditAt > UNDO_COALESCE_MS) {
@@ -241,13 +614,17 @@ export default function App() {
       setHistoryVersion((v) => v + 1);
     }
     h.lastEditAt = now;
+    let updatedRef: ProcurementJob | null = null;
     setJobs((prev) =>
-      prev.map((j) =>
-        j.id === activeJob.id
-          ? { ...updater(j), updatedAt: new Date().toISOString() }
-          : j
-      )
+      prev.map((j) => {
+        if (j.id !== activeJob.id) return j;
+        updatedRef = { ...updater(j), updatedAt: new Date().toISOString() };
+        return updatedRef;
+      })
     );
+    if (updatedRef && !options?.skipCloudSync) {
+      queueCloudJobSync(updatedRef, { auditReason: options?.auditReason });
+    }
   };
 
   const isEditingLocked = () => isJobLocked(activeJob) && amendment?.jobId !== activeJob.id;
@@ -433,40 +810,60 @@ export default function App() {
   };
 
   const handleCreateNewJob = () => {
+    if (isReadOnlyRole) {
+      showToast('Switch off Safe Read-Only Mode to create a new job.');
+      return;
+    }
     const num = jobs.length + 1;
     const fresh = createBlankJob(`Procurement Job #${num}`, company);
+    if (authUser) {
+      fresh.preparedBy = authUser.displayName || authUser.email;
+    }
     setJobs((prev) => [fresh, ...prev]);
     setActiveJobId(fresh.id);
     setActiveTab('QT');
     setSidebarOpen(false);
+    queueCloudJobSync(fresh, { immediate: true, auditReason: 'Created blank job' });
     showToast(`Created fresh job: ${fresh.jobName}`);
   };
 
   const handleDuplicateAsNewJob = () => {
+    if (isReadOnlyRole) {
+      showToast('Switch off Safe Read-Only Mode to duplicate a job.');
+      return;
+    }
     const copy: ProcurementJob = {
       ...safeDeepClone(activeJob),
       id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       jobName: `${activeJob.jobName} (Revision)`,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      preparedBy: authUser?.displayName || authUser?.email || activeJob.preparedBy,
       jobSequence: undefined,
       jobSequenceYear: undefined,
+      version: 1,
       workflow: createDefaultWorkflow(),
       issuedDocs: {},
     };
     setJobs((prev) => [copy, ...prev]);
     setActiveJobId(copy.id);
     setActiveTab('QT');
+    queueCloudJobSync(copy, { immediate: true, auditReason: 'Duplicated as revision job' });
     showToast(`Created unlocked revision job: ${copy.jobName} (will receive a new sequence when issued)`);
   };
 
   const handleDeleteCurrentJob = () => {
+    if (isReadOnlyRole) {
+      showToast('Switch off Safe Read-Only Mode to delete a job.');
+      return;
+    }
     if (jobs.length <= 1) return;
     const target = activeJob;
     setConfirmDialog({
       title: `Delete "${target.jobName}"?`,
-      message:
-        'This permanently removes the job from your local workspace. Claimed document numbers remain recorded in the Master Registry.',
+      message: isCloudMode
+        ? 'This permanently removes the job from your organization workspace. Claimed document numbers remain recorded in the Master Registry.'
+        : 'This permanently removes the job from your local workspace. Claimed document numbers remain recorded in the Master Registry.',
       confirmLabel: 'Delete Job',
       destructive: true,
       onConfirm: () => {
@@ -480,15 +877,50 @@ export default function App() {
           setActiveJobId(remaining[0].id);
           return remaining;
         });
-        showToast(`Removed job "${target.jobName}" from local workspace.`);
+        if (isCloudMode && activeOrgId) {
+          deleteOrgJob(activeOrgId, target.id).catch(() => {
+            const q = enqueueOfflineMutation(activeOrgId, {
+              kind: 'delete_job',
+              jobId: target.id,
+              payload: null,
+            });
+            setPendingOutboxCount(q.length);
+          });
+        }
+        showToast(`Removed job "${target.jobName}".`);
       },
     });
   };
 
   const handleIssueDocument = (prefix: DocPrefix) => {
-    // Per-Job Shared Sequence Rule:
-    // First issued doc on a job claims the next sequence number (e.g. 001).
-    // Every subsequent document in the SAME job reuses that sequence number, changing ONLY the prefix.
+    if (isReadOnlyRole) {
+      showToast('Switch off Safe Read-Only Mode to issue trade documents.');
+      return;
+    }
+
+    if (isCloudMode && activeOrgId) {
+      if (!navigator.onLine) {
+        showToast(
+          'Connect to the server before issuing a document so a unique Master Registry sequence number can be locked safely.'
+        );
+        return;
+      }
+      issueOrgDocument(activeOrgId, activeJob, prefix)
+        .then((res) => {
+          const norm = normalizeJob(res.job);
+          setJobs((prev) => prev.map((j) => (j.id === norm.id ? norm : j)));
+          setRegistry((prev) => mergeRegistryEntries(prev, [res.registryEntry]));
+          showToast(
+            `Issued ${res.docNumber} (Atomic Org Seq #${String(res.sequence).padStart(3, '0')}) — streamed live to executive dashboard.`
+          );
+        })
+        .catch((err) => {
+          showToast(err instanceof Error ? err.message : 'Could not issue document on server.');
+        });
+      return;
+    }
+
+    // Standalone offline local mode fallback
     const hasAssignedSeq =
       typeof activeJob.jobSequence === 'number' && activeJob.jobSequence > 0;
     const seq = hasAssignedSeq
@@ -534,9 +966,8 @@ export default function App() {
     mutateSystemJob((j) => {
       let nextControls = j.controls;
       let nextItems = j.items;
-      let nextWorkflow = j.workflow;
+      const nextWorkflow = j.workflow;
 
-      // Stage 4: Issuing Packing List automatically populates Delivery Note shipment defaults (DN still issued manually)
       if (prefix === 'PL') {
         nextControls = {
           ...j.controls,
@@ -590,6 +1021,33 @@ export default function App() {
   };
 
   const handleVoidRegistryEntry = (docNumber: string, reason: string) => {
+    if (isCloudMode && activeOrgId) {
+      voidOrgRegistryEntry(activeOrgId, docNumber, reason)
+        .then((res) => {
+          setRegistry((prev) =>
+            prev.map((e) => (e.docNumber === docNumber ? res.entry : e))
+          );
+          setJobs((prev) =>
+            prev.map((j) => {
+              const nextIssued = { ...j.issuedDocs };
+              let changed = false;
+              (Object.keys(nextIssued) as DocPrefix[]).forEach((p) => {
+                if (nextIssued[p]?.docNumber === docNumber) {
+                  nextIssued[p] = { ...nextIssued[p]!, isVoided: true };
+                  changed = true;
+                }
+              });
+              return changed ? { ...j, issuedDocs: nextIssued } : j;
+            })
+          );
+          showToast(`Marked ${docNumber} as VOID across organization Master Registry.`);
+        })
+        .catch((err) => {
+          showToast(err instanceof Error ? err.message : 'Could not void registry entry.');
+        });
+      return;
+    }
+
     setRegistry((prev) =>
       prev.map((e) =>
         e.docNumber === docNumber ? { ...e, status: 'VOID', voidReason: reason } : e
@@ -620,6 +1078,7 @@ export default function App() {
     setJobs((prev) => [normalized, ...prev]);
     setActiveJobId(normalized.id);
     setActiveTab('QT');
+    queueCloudJobSync(normalized, { immediate: true, auditReason: 'Imported workbook job' });
   };
 
   const handleApplySupplierQuote = (
@@ -698,6 +1157,11 @@ export default function App() {
       };
     };
 
+    if (isReadOnlyRole) {
+      showToast('Switch off Safe Read-Only Mode to apply a supplier quote.');
+      return;
+    }
+
     if (options.target === 'new_job') {
       const fresh = buildUpdatedJob(
         createBlankJob(
@@ -707,6 +1171,10 @@ export default function App() {
       );
       setJobs((prev) => [fresh, ...prev]);
       setActiveJobId(fresh.id);
+      queueCloudJobSync(fresh, {
+        immediate: true,
+        auditReason: 'Created job from supplier quote',
+      });
     } else {
       mutateActiveJob(buildUpdatedJob);
     }
@@ -751,7 +1219,13 @@ export default function App() {
   const handleUpdateCompany = (patch: Partial<CompanyProfile>) => {
     setCompany((prev) => {
       const next = { ...prev, ...patch };
-      saveCompanyProfile(next);
+      if (localStandaloneMode) {
+        saveCompanyProfile(next);
+      } else if (isCloudMode && activeOrgId) {
+        updateOrgSettings(activeOrgId, { companyProfile: next }).catch((err) => {
+          showToast(err instanceof Error ? err.message : 'Could not save company profile.');
+        });
+      }
       return next;
     });
     if (patch.endUserAddresses) {
@@ -852,6 +1326,30 @@ export default function App() {
       return;
     }
 
+    if (isCloudMode && activeOrgId) {
+      amendOrgDocument(activeOrgId, job, prefix, reason, changes)
+        .then((res) => {
+          const norm = normalizeJob(res.job);
+          setJobs((prev) => prev.map((j) => (j.id === norm.id ? norm : j)));
+          setRegistry((prev) =>
+            prev.map((e) =>
+              e.docNumber === res.docNumber
+                ? { ...e, amount: res.amount, revision: res.revision }
+                : e
+            )
+          );
+          showToast(
+            `Saved ${res.docNumber} as Rev ${res.revision}. ${changes.length} change(s) logged to organization audit trail.`
+          );
+          setAmendment(null);
+          setAmendDialog(null);
+        })
+        .catch((err) => {
+          showToast(err instanceof Error ? err.message : 'Could not save revision.');
+        });
+      return;
+    }
+
     const now = new Date().toISOString();
     const previousRev = doc.revision ?? 1;
     const newRev = previousRev + 1;
@@ -911,7 +1409,17 @@ export default function App() {
   };
 
   const handleExportAuditLog = async (format: 'json' | 'csv' | 'xlsx') => {
-    const entries = loadAuditLog();
+    let entries: AuditEntry[] = [];
+    if (isCloudMode && activeOrgId) {
+      try {
+        const res = await fetchOrgAuditLog(activeOrgId);
+        entries = res.entries;
+      } catch {
+        entries = loadAuditLog();
+      }
+    } else {
+      entries = loadAuditLog();
+    }
     const day = new Date().toISOString().slice(0, 10);
     if (format === 'xlsx') {
       await exportAuditLogXlsx(entries, company);
@@ -967,6 +1475,15 @@ export default function App() {
     {
       group: 'Overview',
       items: [
+        ...(isCloudMode
+          ? [
+              {
+                id: 'EXECUTIVE' as WorkspaceTab,
+                label: 'Executive Live',
+                icon: <Radio className="w-4 h-4" />,
+              },
+            ]
+          : []),
         { id: 'TRACKER', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
       ],
     },
@@ -990,11 +1507,29 @@ export default function App() {
       ],
     },
     {
-      group: 'Ledger & Settings',
+      group: 'Ledger & Administration',
       items: [
         { id: 'REGISTRY', label: 'Master Registry', icon: <Hash className="w-4 h-4" /> },
         { id: 'FILES', label: 'Import & Export', icon: <ArrowLeftRight className="w-4 h-4" /> },
         { id: 'STUDIO', label: 'Clients & Settings', icon: <Settings className="w-4 h-4" /> },
+        ...(isCloudMode
+          ? [
+              {
+                id: 'ORG_ADMIN' as WorkspaceTab,
+                label: 'Organization & Seats',
+                icon: <Users className="w-4 h-4" />,
+              },
+            ]
+          : []),
+        ...(authUser?.isVendorAdmin
+          ? [
+              {
+                id: 'VENDOR_LICENSES' as WorkspaceTab,
+                label: 'Vendor License Keys',
+                icon: <KeyRound className="w-4 h-4" />,
+              },
+            ]
+          : []),
         { id: 'HELP', label: 'Help & Troubleshooting', icon: <CircleHelp className="w-4 h-4" /> },
       ],
     },
@@ -1004,6 +1539,68 @@ export default function App() {
     ['QT', 'PI', 'PO', 'PL', 'DN', 'CI'].includes(tab);
 
   const endUser = getResolvedEndUser(activeJob) || 'Unassigned End User';
+
+  // Gate 1: Initial Auth check loading
+  if (!authReady) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="bg-white border border-slate-200 rounded-xl px-8 py-6 text-center space-y-2">
+          <div className="font-display text-sm font-semibold text-slate-900">
+            Connecting to Grand Group Procurement Suite...
+          </div>
+          <div className="text-xs text-slate-500">Verifying workspace session</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Gate 2: Standalone Vendor Console opened from Onboarding
+  if (!localStandaloneMode && authUser?.isVendorAdmin && !activeOrg && onboardingVendorOpen) {
+    return (
+      <div className="min-h-screen bg-slate-50 p-6 max-w-6xl mx-auto">
+        <VendorLicenseConsoleView
+          onNotify={showToast}
+          onBack={() => setOnboardingVendorOpen(false)}
+        />
+        {toast && (
+          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-medium text-white shadow-lg">
+            {toast}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Gate 3: Sign-In or Organization Onboarding (unless user chose Standalone Offline Local Mode)
+  if (!localStandaloneMode && (!authUser || !activeOrg)) {
+    return (
+      <AuthGateView
+        mode={authUser ? 'org_onboarding' : 'sign_in'}
+        user={authUser}
+        pendingInvites={pendingInvites}
+        authLoading={authLoading}
+        authError={authError}
+        onGoogleSignIn={handleGoogleSignIn}
+        onSignOut={handleSignOut}
+        onEnterLocalOfflineMode={() => {
+          setLocalStandaloneMode(true);
+          setActiveTab('TRACKER');
+        }}
+        onOrganizationReady={async (org) => {
+          if (!org || typeof org.id !== 'string') return;
+          setOrganizations((prev) => [
+            org,
+            ...(Array.isArray(prev) ? prev : []).filter((o) => o && o.id !== org.id),
+          ]);
+          setActiveOrgId(org.id);
+          await loadOrganizationWorkspace(org);
+        }}
+        onOpenVendorConsole={
+          authUser?.isVendorAdmin ? () => setOnboardingVendorOpen(true) : undefined
+        }
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen flex bg-slate-50 text-slate-900">
@@ -1143,6 +1740,61 @@ export default function App() {
             </div>
           ))}
         </nav>
+
+        {/* Organization Account & Role Footer */}
+        <div className="p-3 border-t border-slate-200 bg-slate-50/70 space-y-2">
+          {isCloudMode && activeOrg && authUser ? (
+            <>
+              {organizations.length > 1 && (
+                <select
+                  aria-label="Switch organization"
+                  value={activeOrg.id}
+                  onChange={(e) => {
+                    const nextOrg = organizations.find((o) => o.id === e.target.value);
+                    if (nextOrg) {
+                      setActiveOrgId(nextOrg.id);
+                      void loadOrganizationWorkspace(nextOrg);
+                    }
+                  }}
+                  className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-800"
+                >
+                  {organizations.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name} ({ROLE_LABELS[o.role]})
+                    </option>
+                  ))}
+                </select>
+              )}
+              <div className="flex items-center justify-between gap-2 px-1">
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-slate-900 truncate">
+                    {authUser.displayName || authUser.email}
+                  </div>
+                  <div className="text-[11px] text-slate-500 truncate">
+                    {ROLE_LABELS[activeOrg.role]} · {activeOrg.activeSeatsUsed}/{activeOrg.seatLimit} seats
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  title="Sign out"
+                  className="p-1.5 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-200/70 cursor-pointer shrink-0"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setLocalStandaloneMode(false)}
+              className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-800 cursor-pointer"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span>Sign In to Cloud Organization</span>
+            </button>
+          )}
+        </div>
       </aside>
 
       {/* Main Content Shell */}
@@ -1242,8 +1894,61 @@ export default function App() {
             </span>
           </div>
 
-          {/* Platform Version Switcher (Windows vs iPad) */}
-          <div className="flex flex-wrap items-center gap-3">
+          {/* Executive Safe Mode / Live Shortcut & Platform Version Switcher */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            {isCloudMode && activeOrg && activeTab !== 'EXECUTIVE' && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('EXECUTIVE')}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-800 cursor-pointer whitespace-nowrap min-h-[30px]"
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    executiveStream.streamState === 'live' ? 'bg-emerald-500' : 'bg-amber-500'
+                  }`}
+                  aria-hidden="true"
+                />
+                <span>Executive Live</span>
+              </button>
+            )}
+
+            {isCloudMode &&
+              activeOrg &&
+              (activeOrg.role === 'CEO_EXECUTIVE' || activeOrg.role === 'ORG_ADMIN') &&
+              activeTab !== 'EXECUTIVE' && (
+                <button
+                  type="button"
+                  onClick={() => setExecutiveSafeMode((v) => !v)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-semibold cursor-pointer whitespace-nowrap min-h-[30px] ${
+                    executiveSafeMode
+                      ? 'border-amber-300 bg-amber-50 text-amber-900'
+                      : 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                  }`}
+                >
+                  {executiveSafeMode ? (
+                    <>
+                      <Lock className="w-3 h-3" />
+                      <span>Safe Browse</span>
+                    </>
+                  ) : (
+                    <>
+                      <Unlock className="w-3 h-3" />
+                      <span>Edit Mode</span>
+                    </>
+                  )}
+                </button>
+              )}
+
+            {pendingOutboxCount > 0 && isCloudMode && (
+              <button
+                type="button"
+                onClick={handleFlushOfflineOutbox}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-amber-300 bg-amber-50 text-amber-900 text-xs font-semibold cursor-pointer whitespace-nowrap min-h-[30px]"
+              >
+                <span>{pendingOutboxCount} Offline Queued · Sync</span>
+              </button>
+            )}
+
             <div className="inline-flex items-center p-0.5 rounded-lg bg-slate-200/80">
               <button
                 type="button"
@@ -1272,6 +1977,64 @@ export default function App() {
             </div>
           </div>
         </div>
+
+        {/* Expired License or Optimistic Concurrency Conflict Banners */}
+        {isCloudMode && activeOrg?.licenseExpired && (
+          <div className="no-print border-b border-red-200 bg-red-50 px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs text-red-900">
+            <div className="flex items-center gap-2 font-medium">
+              <ShieldAlert className="w-4 h-4 shrink-0" />
+              <span>
+                Your organization license has expired. Editing is paused until an Organization Admin
+                applies a renewed signed license key.
+              </span>
+            </div>
+            {activeOrg.role === 'ORG_ADMIN' && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('ORG_ADMIN')}
+                className="px-3 py-1 rounded-md bg-red-700 hover:bg-red-800 text-white font-semibold cursor-pointer"
+              >
+                Apply License Key
+              </button>
+            )}
+          </div>
+        )}
+
+        {syncConflict && isCloudMode && activeOrgId && (
+          <div className="no-print border-b border-amber-300 bg-amber-50 px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs text-amber-950">
+            <span>{syncConflict.message}</span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setJobs((prev) =>
+                    prev.map((j) => (j.id === syncConflict.jobId ? syncConflict.serverJob : j))
+                  );
+                  setSyncConflict(null);
+                  showToast('Loaded latest server version of the job.');
+                }}
+                className="px-3 py-1 rounded-md border border-amber-400 bg-white hover:bg-amber-100 font-semibold cursor-pointer"
+              >
+                Load Server Latest
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  queueCloudJobSync(syncConflict.localJob, {
+                    immediate: true,
+                    forceOverwrite: true,
+                    auditReason: 'Resolved conflict keeping local draft',
+                  });
+                  setSyncConflict(null);
+                  showToast('Saved your local draft to the cloud workspace.');
+                }}
+                className="px-3 py-1 rounded-md bg-amber-700 hover:bg-amber-800 text-white font-semibold cursor-pointer"
+              >
+                Keep My Draft
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* iPad Quick Document Selector Strip when viewing Trade Documents */}
         {platformMode === 'ipad' && isDocTab(activeTab) && (
@@ -1303,6 +2066,48 @@ export default function App() {
 
         {/* Active Viewport Content */}
         <main className={`flex-1 p-4 sm:p-6 max-w-[1440px] w-full mx-auto ${platformMode === 'ipad' ? 'pb-24' : ''}`}>
+          {workspaceLoading && (
+            <div className="mb-4 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-xs text-slate-600">
+              Synchronizing organization workspace...
+            </div>
+          )}
+
+          {activeTab === 'EXECUTIVE' && isCloudMode && activeOrg && (
+            <ExecutiveLiveView
+              snapshot={executiveStream.snapshot}
+              loading={executiveStream.loading}
+              error={executiveStream.error}
+              streamState={executiveStream.streamState}
+              lastPulseAt={executiveStream.lastPulseAt}
+              role={activeOrg.role}
+              executiveSafeMode={executiveSafeMode}
+              onToggleSafeMode={() => setExecutiveSafeMode((v) => !v)}
+              onRefreshSnapshot={executiveStream.refreshSnapshot}
+              onOpenJobInFullApp={(jobId, tab) => {
+                handleSelectJobAndTab(jobId, tab);
+              }}
+              onOpenOrgSeats={() => setActiveTab('ORG_ADMIN')}
+              onNotify={showToast}
+            />
+          )}
+
+          {activeTab === 'ORG_ADMIN' && isCloudMode && activeOrg && (
+            <OrgAdminView
+              organization={activeOrg}
+              offlineLease={offlineLease}
+              pendingOutboxCount={pendingOutboxCount}
+              onSyncNow={handleFlushOfflineOutbox}
+              onWorkspaceReloaded={async () => {
+                await bootstrapSession();
+              }}
+              onNotify={showToast}
+            />
+          )}
+
+          {activeTab === 'VENDOR_LICENSES' && authUser?.isVendorAdmin && (
+            <VendorLicenseConsoleView onNotify={showToast} />
+          )}
+
           {activeTab === 'TRACKER' && (
             <JobTrackerDashboard
               jobs={jobs}

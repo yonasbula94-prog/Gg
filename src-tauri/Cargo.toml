@@ -1,0 +1,18 @@
+[package]
+name = "grand-group-procurement"
+version = "2.0.0"
+description = "Grand Group FZC Multi-User Procurement Suite Desktop Client"
+authors = ["Grand Group FZC"]
+edition = "2021"
+
+[lib]
+name = "grand_group_procurement_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

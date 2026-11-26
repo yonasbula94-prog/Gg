@@ -5,9 +5,11 @@
     "useDefineForClassFields": false,
     "module": "ESNext",
     "types": [
+      "node",
       "vite/client",
       "vite-plugin-pwa/client"
     ],
+    "resolveJsonModule": true,
     "lib": [
       "ES2022",
       "DOM",

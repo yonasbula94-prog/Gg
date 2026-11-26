@@ -22,6 +22,7 @@ export interface ThemeCustomization {
 export type PlatformMode = 'windows' | 'ipad';
 
 export type WorkspaceTab =
+  | 'EXECUTIVE'
   | 'TRACKER'
   | 'SUPPLIER_RFQ'
   | 'INTERNAL_QUOTE'
@@ -35,6 +36,8 @@ export type WorkspaceTab =
   | 'REGISTRY'
   | 'FILES'
   | 'STUDIO'
+  | 'ORG_ADMIN'
+  | 'VENDOR_LICENSES'
   | 'HELP';
 
 export interface DashboardPreferences {
@@ -295,6 +298,7 @@ export interface ProcurementJob {
   columnOrder?: string[]; // Custom visual order of standard + extra columns across all 6 docs
   items: JobItemRow[]; // Always length 20, rowNumber 17..36
   issuedDocs: Partial<Record<DocPrefix, IssuedDocRecord>>;
+  version?: number; // Optimistic concurrency version for multi-user cloud sync
 }
 
 export interface RegistryEntry {

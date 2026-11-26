@@ -739,6 +739,7 @@ export const HELP_TOPICS: HelpTopic[] = [
 
 /** Which help topic opens for each workspace page */
 const TAB_TOPIC: Record<WorkspaceTab, string> = {
+  EXECUTIVE: 'dashboard',
   TRACKER: 'dashboard',
   SUPPLIER_RFQ: 'supplierrfq',
   INTERNAL_QUOTE: 'internalquote',
@@ -752,6 +753,8 @@ const TAB_TOPIC: Record<WorkspaceTab, string> = {
   REGISTRY: 'registry',
   FILES: 'importexport',
   STUDIO: 'settings',
+  ORG_ADMIN: 'settings',
+  VENDOR_LICENSES: 'settings',
   HELP: 'overview',
 };
 
