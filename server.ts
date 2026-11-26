@@ -96,7 +96,8 @@ async function startServer() {
   } else {
     const distDir = path.resolve(__dirname, 'dist');
     app.use(express.static(distDir));
-    app.get('*', (_req, res) => {
+    // Express 5 rejects the bare '*' path, so use a regex for the SPA fallback.
+    app.get(/.*/, (_req, res) => {
       res.sendFile(path.join(distDir, 'index.html'));
     });
   }
