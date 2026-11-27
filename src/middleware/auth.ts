@@ -108,23 +108,33 @@ async function upsertUserRecord(params: {
 }
 
 export const requireAuth = async (req: AuthRequest, res: Response, next: NextFunction) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  const customHeader = req.headers['x-firebase-auth'];
+  const customToken = typeof customHeader === 'string' ? customHeader.trim() : '';
+
+  const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
+  const bearerToken = authHeader.startsWith('Bearer ')
+    ? authHeader.slice('Bearer '.length).trim()
+    : '';
+
+  const token = customToken || bearerToken;
+  if (!token) {
     return res.status(401).json({ error: 'Authentication required. Please sign in.' });
   }
 
-  const token = authHeader.slice('Bearer '.length).trim();
-  if (!token) {
-    return res.status(401).json({ error: 'Missing authentication token.' });
+  let decoded;
+  try {
+    decoded = await adminAuth.verifyIdToken(token);
+  } catch (err) {
+    console.error('Auth token verification error:', err);
+    return res.status(401).json({ error: 'Session expired or invalid. Please sign in again.' });
+  }
+
+  const email = (decoded.email || '').trim().toLowerCase();
+  if (!email) {
+    return res.status(401).json({ error: 'Account email is required to access workspaces.' });
   }
 
   try {
-    const decoded = await adminAuth.verifyIdToken(token);
-    const email = (decoded.email || '').trim().toLowerCase();
-    if (!email) {
-      return res.status(401).json({ error: 'Account email is required to access workspaces.' });
-    }
-
     req.authUser = await upsertUserRecord({
       uid: decoded.uid,
       email,
@@ -133,8 +143,8 @@ export const requireAuth = async (req: AuthRequest, res: Response, next: NextFun
     });
     next();
   } catch (err) {
-    console.error('Auth token verification error:', err);
-    return res.status(401).json({ error: 'Session expired or invalid. Please sign in again.' });
+    console.error('User profile sync error:', err);
+    return res.status(500).json({ error: 'Could not sync your account profile. Please try again.' });
   }
 };
 

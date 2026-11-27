@@ -11,13 +11,14 @@ export default defineConfig(() => {
       react(),
       tailwindcss(),
       VitePWA({
+        selfDestroying: true,
         registerType: 'autoUpdate',
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
         manifest: {
           id: '/',
           name: 'Grand Group FZC Procurement',
           short_name: 'GG Procure',
-          description: 'Offline-first procurement document workstation for Grand Group FZC with live Excel calculations and styled .xlsx exports.',
+          description: 'Multi-user procurement document workstation for Grand Group FZC with live Excel calculations and styled .xlsx exports.',
           theme_color: '#1B365D',
           background_color: '#F8FAFC',
           display: 'standalone',
@@ -44,49 +45,8 @@ export default defineConfig(() => {
             },
           ],
         },
-        workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
-          globIgnores: ['**/offline-windows.dat', '**/offline-ipad.dat'],
-          navigateFallbackDenylist: [/^\/api\//, /^\/ws/],
-          maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
-          runtimeCaching: [
-            {
-              urlPattern: /^\/api\/.*/i,
-              handler: 'NetworkOnly',
-            },
-            {
-              urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'google-fonts-cache',
-                expiration: {
-                  maxEntries: 10,
-                  maxAgeSeconds: 60 * 60 * 24 * 365,
-                },
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-              },
-            },
-            {
-              urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'gstatic-fonts-cache',
-                expiration: {
-                  maxEntries: 10,
-                  maxAgeSeconds: 60 * 60 * 24 * 365,
-                },
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-              },
-            },
-          ],
-        },
         devOptions: {
-          enabled: true,
-          type: 'module',
+          enabled: false,
         },
       }),
       // Copies src/assets into dist/ so root-relative URLs like

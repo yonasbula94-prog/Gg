@@ -6,6 +6,7 @@ import {
   signInWithPopup,
   signOut,
   updateProfile,
+  type User,
 } from 'firebase/auth';
 import {
   ArrowLeftRight,
@@ -259,7 +260,9 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [authUser, setAuthUser] = useState<AuthUserProfile | null>(null);
+  const bootstrapInFlightRef = useRef<Promise<void> | null>(null);
   const [organizations, setOrganizations] = useState<OrganizationSummary[]>([]);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [activeOrgId, setActiveOrgId] = useState<string | null>(null);
@@ -373,48 +376,100 @@ export default function App() {
     []
   );
 
-  const bootstrapSession = useCallback(async () => {
-    setAuthLoading(true);
-    setAuthError(null);
-    try {
-      const session = await fetchSessionBootstrap();
-      if (!session || !session.user || !Array.isArray(session.organizations)) {
-        throw new Error('Workspace session response was incomplete. Please sign in again.');
-      }
-      const nextOrgs = session.organizations.filter(
-        (o): o is OrganizationSummary => Boolean(o && typeof o.id === 'string')
-      );
-      const nextInvites = Array.isArray(session.pendingInvites) ? session.pendingInvites : [];
-      setAuthUser(session.user);
-      setOrganizations(nextOrgs);
-      setPendingInvites(nextInvites);
-      if (nextOrgs.length > 0) {
-        const chosen = nextOrgs[0];
-        setActiveOrgId(chosen.id);
-        setLocalStandaloneMode(false);
-        await loadOrganizationWorkspace(chosen);
-      } else {
-        setActiveOrgId(null);
-      }
-    } catch (err) {
-      setAuthError(
-        err instanceof Error ? err.message : 'Could not verify your workspace session.'
-      );
-    } finally {
-      setAuthLoading(false);
-      setAuthReady(true);
+  const formatAuthError = (err: unknown): string => {
+    const code =
+      typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: unknown }).code || '')
+        : '';
+    switch (code) {
+      case 'auth/popup-blocked':
+        return 'Your browser blocked the Google Sign-In popup. Please allow popups for this site and tap Continue with Google again.';
+      case 'auth/popup-closed-by-user':
+      case 'auth/cancelled-popup-request':
+        return 'Google Sign-In was closed before completing. Tap Continue with Google to try again.';
+      case 'auth/unauthorized-domain':
+        return `This domain (${window.location.hostname}) is not authorized in Firebase Authentication yet. Add it under Firebase Console → Authentication → Settings → Authorized domains.`;
+      case 'auth/operation-not-allowed':
+        return 'Google Sign-In is not enabled in Firebase Authentication for this project.';
+      case 'auth/network-request-failed':
+        return 'Network error contacting Google Sign-In. Check your internet connection and try again.';
+      default:
+        return err instanceof Error ? err.message : 'Could not verify your workspace session.';
     }
-  }, [loadOrganizationWorkspace]);
+  };
+
+  const bootstrapSession = useCallback(
+    async (explicitUser?: User | null) => {
+      if (bootstrapInFlightRef.current) {
+        return bootstrapInFlightRef.current;
+      }
+
+      const task = (async () => {
+        const fbUser = explicitUser ?? auth.currentUser;
+        if (!fbUser) {
+          setAuthUser(null);
+          setOrganizations([]);
+          setPendingInvites([]);
+          setActiveOrgId(null);
+          setAuthLoading(false);
+          setAuthReady(true);
+          return;
+        }
+
+        setAuthLoading(true);
+        setAuthError(null);
+        try {
+          const freshIdToken = await fbUser.getIdToken(true);
+          const session = await fetchSessionBootstrap(freshIdToken);
+          if (!session || !session.user || !Array.isArray(session.organizations)) {
+            throw new Error('Workspace session response was incomplete. Please sign in again.');
+          }
+          const nextOrgs = session.organizations.filter(
+            (o): o is OrganizationSummary => Boolean(o && typeof o.id === 'string')
+          );
+          const nextInvites = Array.isArray(session.pendingInvites) ? session.pendingInvites : [];
+          setAuthUser(session.user);
+          setOrganizations(nextOrgs);
+          setPendingInvites(nextInvites);
+          if (nextOrgs.length > 0) {
+            const chosen = nextOrgs[0];
+            setActiveOrgId(chosen.id);
+            setLocalStandaloneMode(false);
+            await loadOrganizationWorkspace(chosen);
+          } else {
+            setActiveOrgId(null);
+          }
+        } catch (err) {
+          setAuthError(formatAuthError(err));
+        } finally {
+          setAuthLoading(false);
+          setAuthReady(true);
+        }
+      })();
+
+      bootstrapInFlightRef.current = task;
+      try {
+        await task;
+      } finally {
+        if (bootstrapInFlightRef.current === task) {
+          bootstrapInFlightRef.current = null;
+        }
+      }
+    },
+    [loadOrganizationWorkspace]
+  );
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (fbUser) => {
+      setFirebaseUser(fbUser);
       if (fbUser) {
-        await bootstrapSession();
+        await bootstrapSession(fbUser);
       } else {
         setAuthUser(null);
         setOrganizations([]);
         setPendingInvites([]);
         setActiveOrgId(null);
+        setAuthLoading(false);
         setAuthReady(true);
       }
     });
@@ -426,11 +481,16 @@ export default function App() {
     setAuthError(null);
     try {
       const cred = await signInWithPopup(auth, googleAuthProvider);
-      await ensureUserProfile(cred.user).catch((err) =>
-        console.warn('Could not write Firestore user profile:', err)
-      );
+      if (cred.user) {
+        setFirebaseUser(cred.user);
+        await ensureUserProfile(cred.user).catch((err) =>
+          console.warn('Could not write Firestore user profile:', err)
+        );
+        await bootstrapSession(cred.user);
+      }
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Google Sign-In was cancelled or failed.');
+      setAuthError(formatAuthError(err));
+    } finally {
       setAuthLoading(false);
     }
   };
@@ -467,11 +527,22 @@ export default function App() {
     }
   };
 
+  const handleRetrySession = async () => {
+    const current = auth.currentUser ?? firebaseUser;
+    if (current) {
+      await bootstrapSession(current);
+    } else {
+      await handleGoogleSignIn();
+    }
+  };
+
   const handleSignOut = async () => {
     try {
       await signOut(auth);
+      setFirebaseUser(null);
       setActiveOrgId(null);
       setAuthUser(null);
+      setAuthError(null);
       setOrganizations([]);
       setPendingInvites([]);
       setLocalStandaloneMode(false);
@@ -1644,12 +1715,14 @@ export default function App() {
       <AuthGateView
         mode={authUser ? 'org_onboarding' : 'sign_in'}
         user={authUser}
+        firebaseUserEmail={firebaseUser?.email ?? null}
         pendingInvites={pendingInvites}
         authLoading={authLoading}
         authError={authError}
         onGoogleSignIn={handleGoogleSignIn}
         onEmailSignIn={handleEmailSignIn}
         onEmailSignUp={handleEmailSignUp}
+        onRetrySession={handleRetrySession}
         onSignOut={handleSignOut}
         onEnterLocalOfflineMode={() => {
           setLocalStandaloneMode(true);

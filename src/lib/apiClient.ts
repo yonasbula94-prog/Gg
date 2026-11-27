@@ -42,32 +42,51 @@ export class ApiError extends Error {
   }
 }
 
-async function getBearerHeader(): Promise<Record<string, string>> {
+async function getAuthHeader(explicitToken?: string): Promise<Record<string, string>> {
+  if (explicitToken) {
+    return {
+      'X-Firebase-Auth': explicitToken,
+    };
+  }
   const current = auth.currentUser;
   if (!current) {
     throw new ApiError('Please sign in to continue.', 401);
   }
   const idToken = await current.getIdToken();
   return {
-    Authorization: `Bearer ${idToken}`,
+    'X-Firebase-Auth': idToken,
   };
 }
 
-async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function apiRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  options?: { explicitToken?: string }
+): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
-    ...(await getBearerHeader()),
+    ...(await getAuthHeader(options?.explicitToken)),
     ...(init.body ? { 'Content-Type': 'application/json' } : {}),
     ...((init.headers as Record<string, string>) || {}),
   };
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    cache: 'no-store',
-    ...init,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      cache: 'no-store',
+      credentials: 'include',
+      ...init,
+      headers,
+    });
+  } catch {
+    throw new ApiError(
+      'Could not connect to the workspace server. Check your internet connection and try again.',
+      0,
+      'NETWORK_ERROR'
+    );
+  }
 
-  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+  const contentType = response.headers.get('content-type') || 'unknown';
   const text = await response.text();
   let parsed: Record<string, unknown> | null = null;
   if (text) {
@@ -85,16 +104,18 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(
       parsed && typeof parsed.error === 'string'
         ? parsed.error
-        : `Request failed (${response.status})`,
+        : `Request failed (HTTP ${response.status})`,
       response.status,
       parsed && typeof parsed.code === 'string' ? parsed.code : undefined,
       parsed ?? text
     );
   }
 
-  if (parsed === null || !contentType.includes('application/json')) {
+  if (parsed === null) {
     throw new ApiError(
-      'Unable to reach the workspace API right now. Please refresh the page and try again.',
+      response.redirected
+        ? 'Your browser session was redirected before reaching the workspace API. Please reload the page and sign in again.'
+        : `Workspace API returned a non-JSON response (HTTP ${response.status}, ${contentType.split(';')[0]}). Please refresh and try again.`,
       502,
       'INVALID_JSON_RESPONSE'
     );
@@ -103,8 +124,14 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   return parsed as T;
 }
 
-export async function fetchSessionBootstrap(): Promise<SessionBootstrapResponse> {
-  return apiRequest<SessionBootstrapResponse>('/api/auth/session');
+export async function fetchSessionBootstrap(
+  explicitToken?: string
+): Promise<SessionBootstrapResponse> {
+  return apiRequest<SessionBootstrapResponse>(
+    '/api/auth/session',
+    {},
+    { explicitToken }
+  );
 }
 
 export async function createOrganization(params: {
