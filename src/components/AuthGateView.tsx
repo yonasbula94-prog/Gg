@@ -22,6 +22,8 @@ interface AuthGateViewProps {
   authLoading: boolean;
   authError: string | null;
   onGoogleSignIn: () => Promise<void>;
+  onEmailSignIn: (email: string, password: string) => Promise<void>;
+  onEmailSignUp: (name: string, email: string, password: string) => Promise<void>;
   onRetrySession?: () => Promise<void>;
   onSignOut: () => Promise<void>;
   onEnterLocalOfflineMode: () => void;
@@ -37,12 +39,18 @@ export const AuthGateView: React.FC<AuthGateViewProps> = ({
   authLoading,
   authError,
   onGoogleSignIn,
+  onEmailSignIn,
+  onEmailSignUp,
   onRetrySession,
   onSignOut,
   onEnterLocalOfflineMode,
   onOrganizationReady,
   onOpenVendorConsole,
 }) => {
+  const [authTab, setAuthTab] = useState<'signin' | 'signup'>('signin');
+  const [authName, setAuthName] = useState('');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
   const [orgName, setOrgName] = useState('');
   const [licenseKey, setLicenseKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -72,6 +80,20 @@ export const AuthGateView: React.FC<AuthGateViewProps> = ({
       setFormError(err instanceof Error ? err.message : 'Could not create organization workspace.');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+    if (!authEmail.trim() || !authPassword) {
+      setFormError('Enter your email and password.');
+      return;
+    }
+    if (authTab === 'signup') {
+      await onEmailSignUp(authName, authEmail, authPassword);
+    } else {
+      await onEmailSignIn(authEmail, authPassword);
     }
   };
 
@@ -188,15 +210,15 @@ export const AuthGateView: React.FC<AuthGateViewProps> = ({
                   Sign in to your workspace
                 </h2>
                 <p className="text-sm text-slate-600 mt-1.5">
-                  Use your organization Google account to access your assigned seat, shared Master
+                  Sign in with your email and password to access your assigned seat, shared Master
                   Registry, and live executive stream.
                 </p>
               </div>
 
-              {authError && (
+              {(authError || formError) && (
                 <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800 space-y-2">
-                  <div>{authError}</div>
-                  {firebaseUserEmail && (
+                  <div>{formError || authError}</div>
+                  {!formError && firebaseUserEmail && (
                     <div className="pt-1 flex flex-wrap items-center gap-2">
                       {onRetrySession && (
                         <button
@@ -221,14 +243,94 @@ export const AuthGateView: React.FC<AuthGateViewProps> = ({
                 </div>
               )}
 
+              <div role="tablist" className="grid grid-cols-2 rounded-lg border border-slate-200 p-1 bg-slate-50">
+                {(['signin', 'signup'] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    role="tab"
+                    aria-selected={authTab === tab}
+                    onClick={() => {
+                      setAuthTab(tab);
+                      setFormError(null);
+                    }}
+                    className={`min-h-[36px] rounded-md text-xs font-semibold cursor-pointer ${
+                      authTab === tab ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'
+                    }`}
+                  >
+                    {tab === 'signin' ? 'Sign In' : 'Create Account'}
+                  </button>
+                ))}
+              </div>
+
+              <form onSubmit={handleEmailAuth} className="space-y-4" noValidate>
+                {authTab === 'signup' && (
+                  <div>
+                    <label htmlFor="auth-name-input" className="block text-xs font-medium text-slate-700 mb-1">
+                      Full name
+                    </label>
+                    <input
+                      id="auth-name-input"
+                      type="text"
+                      autoComplete="name"
+                      value={authName}
+                      onChange={(e) => setAuthName(e.target.value)}
+                      className="w-full min-h-[42px] rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#1B365D] focus:outline-none"
+                    />
+                  </div>
+                )}
+                <div>
+                  <label htmlFor="auth-email-input" className="block text-xs font-medium text-slate-700 mb-1">
+                    Email
+                  </label>
+                  <input
+                    id="auth-email-input"
+                    type="email"
+                    autoComplete="email"
+                    required
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    className="w-full min-h-[42px] rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#1B365D] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="auth-password-input" className="block text-xs font-medium text-slate-700 mb-1">
+                    Password{authTab === 'signup' && <span className="text-slate-400 font-normal"> (min. 6 characters)</span>}
+                  </label>
+                  <input
+                    id="auth-password-input"
+                    type="password"
+                    autoComplete={authTab === 'signup' ? 'new-password' : 'current-password'}
+                    required
+                    minLength={authTab === 'signup' ? 6 : undefined}
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    className="w-full min-h-[42px] rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#1B365D] focus:outline-none"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={authLoading}
+                  className="w-full min-h-[44px] flex items-center justify-center gap-3 rounded-lg bg-[#1B365D] hover:bg-[#152a48] text-white px-5 py-3 text-sm font-semibold transition-colors cursor-pointer disabled:opacity-60"
+                >
+                  <span>
+                    {authLoading
+                      ? 'Please wait...'
+                      : authTab === 'signup'
+                      ? 'Create Account'
+                      : 'Sign In'}
+                  </span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </form>
+
               <button
                 type="button"
                 disabled={authLoading}
                 onClick={onGoogleSignIn}
-                className="w-full min-h-[44px] flex items-center justify-center gap-3 rounded-lg bg-[#1B365D] hover:bg-[#152a48] text-white px-5 py-3 text-sm font-semibold transition-colors cursor-pointer disabled:opacity-60"
+                className="w-full min-h-[42px] flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 text-xs font-medium transition-colors cursor-pointer disabled:opacity-60"
               >
-                <span>{authLoading ? 'Signing in...' : 'Continue with Google'}</span>
-                <ArrowRight className="w-4 h-4" />
+                <span>Continue with Google</span>
               </button>
 
               <div className="relative py-2">

@@ -1,5 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
+import {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+  updateProfile,
+  type User,
+} from 'firebase/auth';
 import {
   ArrowLeftRight,
   Building2,
@@ -34,6 +42,31 @@ import {
   X,
 } from 'lucide-react';
 import { auth, googleAuthProvider } from './lib/firebase';
+import { ensureUserProfile } from './lib/userProfile';
+
+function friendlyAuthError(err: unknown): string {
+  const code = typeof err === 'object' && err !== null && 'code' in err ? String((err as { code: unknown }).code) : '';
+  switch (code) {
+    case 'auth/invalid-email':
+      return 'Enter a valid email address.';
+    case 'auth/missing-password':
+      return 'Enter your password.';
+    case 'auth/weak-password':
+      return 'Password must be at least 6 characters.';
+    case 'auth/email-already-in-use':
+      return 'An account with this email already exists. Sign in instead.';
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'Email or password is incorrect.';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Please wait a few minutes and try again.';
+    case 'auth/network-request-failed':
+      return 'Network error. Check your connection and try again.';
+    default:
+      return err instanceof Error ? err.message : 'Sign-in failed. Please try again.';
+  }
+}
 import {
   amendOrgDocument,
   ApiError,
@@ -450,11 +483,46 @@ export default function App() {
       const cred = await signInWithPopup(auth, googleAuthProvider);
       if (cred.user) {
         setFirebaseUser(cred.user);
+        await ensureUserProfile(cred.user).catch((err) =>
+          console.warn('Could not write Firestore user profile:', err)
+        );
         await bootstrapSession(cred.user);
       }
     } catch (err) {
       setAuthError(formatAuthError(err));
     } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleEmailSignIn = async (email: string, password: string) => {
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+      await ensureUserProfile(cred.user).catch((err) =>
+        console.warn('Could not write Firestore user profile:', err)
+      );
+    } catch (err) {
+      setAuthError(friendlyAuthError(err));
+      setAuthLoading(false);
+    }
+  };
+
+  const handleEmailSignUp = async (name: string, email: string, password: string) => {
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const displayName = name.trim();
+      if (displayName) {
+        await updateProfile(cred.user, { displayName });
+      }
+      await ensureUserProfile(cred.user, displayName || undefined).catch((err) =>
+        console.warn('Could not write Firestore user profile:', err)
+      );
+    } catch (err) {
+      setAuthError(friendlyAuthError(err));
       setAuthLoading(false);
     }
   };
@@ -1652,6 +1720,8 @@ export default function App() {
         authLoading={authLoading}
         authError={authError}
         onGoogleSignIn={handleGoogleSignIn}
+        onEmailSignIn={handleEmailSignIn}
+        onEmailSignUp={handleEmailSignUp}
         onRetrySession={handleRetrySession}
         onSignOut={handleSignOut}
         onEnterLocalOfflineMode={() => {
