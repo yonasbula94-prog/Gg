@@ -1,5 +1,4 @@
 import { createRoot } from 'react-dom/client';
-import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
 import { AppErrorBoundary } from './components/AppErrorBoundary.tsx';
 import '@fontsource/plus-jakarta-sans/500.css';
@@ -16,17 +15,32 @@ import '@fontsource/jetbrains-mono/500.css';
 import '@fontsource/jetbrains-mono/600.css';
 import './index.css';
 
-// Register offline Service Worker only in top-level http/https windows (skip in iframes and file://)
+// Unregister any legacy PWA service workers so deployed updates and /api/* calls are never served stale
 try {
-  if (
-    typeof window !== 'undefined' &&
-    window.location.protocol !== 'file:' &&
-    window.self === window.top
-  ) {
-    registerSW({ immediate: true });
+  if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((regs) => {
+        regs.forEach((reg) => {
+          reg.unregister().catch(() => {});
+        });
+      })
+      .catch(() => {});
+  }
+  if (typeof window !== 'undefined' && 'caches' in window) {
+    caches
+      .keys()
+      .then((keys) => {
+        keys
+          .filter((k) => k.includes('workbox') || k.includes('precache'))
+          .forEach((k) => {
+            caches.delete(k).catch(() => {});
+          });
+      })
+      .catch(() => {});
   }
 } catch {
-  // Ignore SW registration errors when cookies/storage are restricted
+  // Ignore when storage/SW APIs are restricted
 }
 
 createRoot(document.getElementById('root')!).render(

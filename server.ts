@@ -17,6 +17,31 @@ async function startServer() {
   app.set('trust proxy', 1);
   app.use(express.json({ limit: '15mb' }));
 
+  // Prevent proxy caching of authenticated API responses & allow Tauri desktop origins
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const origin = req.headers.origin;
+    if (
+      typeof origin === 'string' &&
+      (origin === 'tauri://localhost' ||
+        origin === 'http://tauri.localhost' ||
+        origin === 'https://tauri.localhost')
+    ) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Content-Type, Accept, Authorization, X-Firebase-Auth'
+      );
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      if (req.method === 'OPTIONS') {
+        res.status(204).end();
+        return;
+      }
+    }
+    next();
+  });
+
   // Mount API routes before Vite / static middleware
   app.use('/api', createApiRouter());
   app.use('/api', (_req, res) => {
@@ -95,9 +120,18 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distDir = path.resolve(__dirname, 'dist');
-    app.use(express.static(distDir));
+    app.use(
+      express.static(distDir, {
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('index.html') || filePath.endsWith('sw.js')) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          }
+        },
+      })
+    );
     app.use((req, res, next) => {
       if (req.method === 'GET' && !req.path.startsWith('/api')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.sendFile(path.join(distDir, 'index.html'));
         return;
       }

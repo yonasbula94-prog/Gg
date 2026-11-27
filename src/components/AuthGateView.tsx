@@ -17,10 +17,12 @@ import { isTauriDesktop } from '../utils/offlineSync';
 interface AuthGateViewProps {
   mode: 'sign_in' | 'org_onboarding';
   user: AuthUserProfile | null;
+  firebaseUserEmail?: string | null;
   pendingInvites: PendingInvite[];
   authLoading: boolean;
   authError: string | null;
   onGoogleSignIn: () => Promise<void>;
+  onRetrySession?: () => Promise<void>;
   onSignOut: () => Promise<void>;
   onEnterLocalOfflineMode: () => void;
   onOrganizationReady: (org: OrganizationSummary) => Promise<void>;
@@ -30,10 +32,12 @@ interface AuthGateViewProps {
 export const AuthGateView: React.FC<AuthGateViewProps> = ({
   mode,
   user,
+  firebaseUserEmail,
   pendingInvites,
   authLoading,
   authError,
   onGoogleSignIn,
+  onRetrySession,
   onSignOut,
   onEnterLocalOfflineMode,
   onOrganizationReady,
@@ -190,8 +194,30 @@ export const AuthGateView: React.FC<AuthGateViewProps> = ({
               </div>
 
               {authError && (
-                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">
-                  {authError}
+                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800 space-y-2">
+                  <div>{authError}</div>
+                  {firebaseUserEmail && (
+                    <div className="pt-1 flex flex-wrap items-center gap-2">
+                      {onRetrySession && (
+                        <button
+                          type="button"
+                          disabled={authLoading}
+                          onClick={onRetrySession}
+                          className="rounded-md bg-red-700 hover:bg-red-800 text-white px-3 py-1.5 text-xs font-semibold cursor-pointer disabled:opacity-60"
+                        >
+                          Retry as {firebaseUserEmail}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={authLoading}
+                        onClick={onSignOut}
+                        className="rounded-md border border-red-300 bg-white hover:bg-red-100 text-red-800 px-3 py-1.5 text-xs font-medium cursor-pointer disabled:opacity-60"
+                      >
+                        Switch Google Account
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
